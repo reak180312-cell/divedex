@@ -29,7 +29,7 @@ npm run build     # static files in dist/ (deployable to any static host, any su
 npm run sites     # refresh client/public/sites.json from OpenStreetMap (Overpass)
 ```
 
-Every push to `main` builds the app and publishes it to GitHub Pages (`.github/workflows/pages.yml`).
+`npm run deploy` builds the app and publishes `dist/` to the `gh-pages` branch, which GitHub Pages serves.
 
 ## Where the data comes from
 

@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --open",
     "sites": "node scripts/build-sites.mjs",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "deploy": "npm run build && node scripts/deploy.mjs"
   },
   "engines": {
     "node": ">=22.13"
