@@ -1,0 +1,9 @@
+node_modules/
+dist/
+server/
+*.log
+my-divedex-backup*.json
+divedex-backup*.json
+*.jpeg
+*.png
+*.tsbuildinfo

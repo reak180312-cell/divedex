@@ -1,0 +1,36 @@
+// Manually curated nicknames / colloquial names -> accepted scientific names.
+// Scientific names are resolved against WoRMS at query time, so if WoRMS has
+// re-classified a taxon the alias still lands on the currently accepted record.
+// Extend freely: { terms: [...english/hebrew nicknames], names: [...scientific names] }.
+export const ALIASES = [
+  { terms: ['nemo', 'נמו', 'clownfish', 'clown fish', 'anemonefish', 'anemone fish', 'דג ליצן', 'דגי ליצן', 'דג שושנים', 'דג השושנים'],
+    names: ['Amphiprion ocellaris', 'Amphiprion percula', 'Amphiprion bicinctus'] },
+  { terms: ['dory', 'דורי', 'blue tang', 'regal tang', 'palette surgeonfish'], names: ['Paracanthurus hepatus'] },
+  { terms: ['whale shark', 'כריש לוויתן', 'כריש לווייתן', 'כריש לוויתני'], names: ['Rhincodon typus'] },
+  { terms: ['manta', 'manta ray', 'מנטה'], names: ['Mobula birostris', 'Mobula alfredi'] },
+  { terms: ['green turtle', 'green sea turtle', 'צב ים ירוק'], names: ['Chelonia mydas'] },
+  { terms: ['loggerhead', 'צב ים חום'], names: ['Caretta caretta'] },
+  { terms: ['sea turtle', 'turtle', 'צב ים', 'צב'], names: ['Chelonia mydas', 'Caretta caretta', 'Eretmochelys imbricata'] },
+  { terms: ['hawksbill', 'hawksbill turtle'], names: ['Eretmochelys imbricata'] },
+  { terms: ['lionfish', 'lion fish', 'זהרון', 'דג אריה'], names: ['Pterois miles', 'Pterois volitans', 'Pterois radiata'] },
+  { terms: ['octopus', 'תמנון'], names: ['Octopus vulgaris', 'Octopus cyanea'] },
+  { terms: ['moray', 'moray eel', 'מורנה'], names: ['Gymnothorax javanicus', 'Muraena helena'] },
+  { terms: ['napoleon', 'napoleon wrasse', 'humphead wrasse', 'נפוליאון'], names: ['Cheilinus undulatus'] },
+  { terms: ['dolphin', 'bottlenose', 'דולפין'], names: ['Tursiops truncatus', 'Tursiops aduncus'] },
+  { terms: ['dugong', 'sea cow', 'דוגונג'], names: ['Dugong dugon'] },
+  { terms: ['picasso', 'picasso fish', 'picasso triggerfish'], names: ['Rhinecanthus assasi', 'Rhinecanthus aculeatus'] },
+  { terms: ['jaws', 'great white', 'great white shark', 'כריש לבן'], names: ['Carcharodon carcharias'] },
+  { terms: ['hammerhead', 'פטישן', 'כריש פטישן'], names: ['Sphyrna lewini', 'Sphyrna mokarran'] },
+  { terms: ['spanish dancer', 'רקדנית ספרדייה', 'רקדנית ספרדיה'], names: ['Hexabranchus sanguineus'] },
+  { terms: ['crown of thorns', 'cots', 'כתר קוצים'], names: ['Acanthaster planci'] },
+  { terms: ['moorish idol'], names: ['Zanclus cornutus'] },
+  { terms: ['barracuda', 'ברקודה'], names: ['Sphyraena barracuda'] },
+  { terms: ['sea urchin', 'urchin', 'קיפוד ים'], names: ['Diadema setosum', 'Diadema savignyi'] },
+  { terms: ['butterflyfish', 'butterfly fish', 'פרפרון'], names: ['Chaetodon semilarvatus', 'Chaetodon auriga', 'Chaetodon fasciatus'] },
+  { terms: ['stingray', 'blue spotted stingray', 'טריגון'], names: ['Taeniura lymma'] },
+  { terms: ['anthias', 'אנתיאס'], names: ['Pseudanthias squamipinnis'] },
+  { terms: ['sergeant major', 'sergeant'], names: ['Abudefduf vaigiensis', 'Abudefduf saxatilis'] },
+  { terms: ['sunfish', 'mola', 'דג ירח'], names: ['Mola mola'] },
+  { terms: ['giant clam', 'clam', 'טרידקנה'], names: ['Tridacna maxima', 'Tridacna squamosa'] },
+  { terms: ['garden eel'], names: ['Gorgasia sillneri', 'Heteroconger hassi'] },
+];

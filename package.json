@@ -1,0 +1,40 @@
+{
+  "name": "divedex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DiveDex — scuba dive logbook and marine-life collection",
+  "scripts": {
+    "dev": "vite --open",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --open",
+    "sites": "node scripts/build-sites.mjs",
+    "typecheck": "tsc -b"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@fontsource/caveat": "^5.3.0",
+    "@fontsource/frank-ruhl-libre": "^5.3.0",
+    "@fontsource/kalam": "^5.3.0",
+    "@fontsource/rubik": "^5.3.0",
+    "idb": "^8.0.4",
+    "idb-keyval": "^6.3.0",
+    "leaflet": "^1.9.4",
+    "leaflet.markercluster": "^1.5.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.22",
+    "@types/leaflet.markercluster": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-pwa": "^2.0.0"
+  }
+}
