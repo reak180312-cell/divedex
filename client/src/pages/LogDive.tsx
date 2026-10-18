@@ -55,6 +55,7 @@ export default function LogDive() {
   const fileRef = useRef<HTMLInputElement>(null);
   const hydrated = useRef(false);
   const dirty = useRef(false);
+  const saved = useRef(false); // set when Save is pressed: no autosave may write after that
   const akey = autosaveKey(editId);
 
   // Prefill: unsaved edits first (if newer than the saved record), else the saved dive, else sensible carry-overs.
@@ -92,8 +93,9 @@ export default function LogDive() {
 
   // Autosave every change (debounced) so nothing is lost if the screen is left by accident.
   useEffect(() => {
-    if (!hydrated.current || !dirty.current) return;
+    if (!hydrated.current || !dirty.current || saved.current) return;
     const t = setTimeout(() => {
+      if (saved.current) return;
       try { localStorage.setItem(akey, JSON.stringify({ form, loc, seen: seen.map(({ species, ...s }) => ({ ...s, species })), highlight, durManual, at: Date.now() } satisfies Autosave)); } catch { /* storage full / private mode */ }
     }, 400);
     return () => clearTimeout(t);
@@ -211,6 +213,8 @@ export default function LogDive() {
     const fields = validate(draft);
     if (!fields) { setToast(draft ? 'Fix the highlighted numbers first' : 'Add the missing details, or save as a draft'); return; }
     setSaving(draft ? 'draft' : 'save');
+    saved.current = true;
+    try { localStorage.removeItem(akey); } catch { /* ignore */ }
     try {
       const { dive } = await saveDive({ id: editId ?? undefined, fields, sightings: seen, newPhotos: photos, draft });
       setPhotos([]);
@@ -218,6 +222,8 @@ export default function LogDive() {
       if (draft) { setToast('Draft saved — finish it any time from your Dive Log'); nav('/log', { replace: true }); }
       else nav(`/log/${dive.id}`, { replace: true });
     } catch (e) {
+      saved.current = false; // save failed: keep protecting what was typed
+      dirty.current = true;
       setToast((e as Error).message);
     } finally {
       setSaving(null);

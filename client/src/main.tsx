@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
-import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import '@fontsource/rubik/latin-400.css';
 import '@fontsource/rubik/hebrew-400.css';
 import '@fontsource/rubik/latin-500.css';
@@ -28,6 +28,20 @@ import Profile from './pages/Profile';
 import Auth from './pages/Auth';
 import { Spinner } from './components/ui';
 
+/**
+ * Every visit to the dive form gets a fresh form — never the previous dive's state.
+ * `location.key` alone is not enough: navigations that change the URL directly (typing it, back/forward,
+ * hash links) all share the key "default", so the form instance could be reused with old data. Count every
+ * new location object instead.
+ */
+let formVisits = 0;
+const visitIds = new WeakMap<object, number>();
+function FreshLogDive() {
+  const loc = useLocation();
+  if (!visitIds.has(loc)) visitIds.set(loc, ++formVisits);
+  return <LogDive key={visitIds.get(loc)} />;
+}
+
 function App() {
   const { user, booting } = useStore();
   if (booting) return <div style={{ paddingTop: '40vh' }}><Spinner /></div>;
@@ -40,9 +54,9 @@ function App() {
         <Route path="discover" element={<Discover />} />
         <Route path="species/:id" element={<Species />} />
         <Route path="log" element={<DiveLog />} />
-        <Route path="log/new" element={<LogDive />} />
+        <Route path="log/new" element={<FreshLogDive />} />
         <Route path="log/:id" element={<DiveView />} />
-        <Route path="log/:id/edit" element={<LogDive />} />
+        <Route path="log/:id/edit" element={<FreshLogDive />} />
         <Route path="sites" element={<Sites />} />
         <Route path="profile" element={<Profile />} />
         <Route path="*" element={<Navigate to="/" replace />} />
