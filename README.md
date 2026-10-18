@@ -17,6 +17,8 @@ It can be installed to your phone's home screen and works offline.
 - Data lives only in the browser where you created it. A phone and a computer each have their own logbook.
 - **Profile → Export backup** saves one JSON file with all dives and photos. **Import backup** restores it on any device. The first-run screen also accepts a backup.
 - Export now and then: clearing the browser's site data erases the logbook. The app asks the browser for persistent storage to reduce that risk.
+- **Upgrades never rewrite your data:** database migrations only add new tables (v2 added `manual`, for species added without a dive). New dive fields (drafts, highlight, duration, special flags) are optional, so older records work unchanged.
+- **Unsaved work is kept:** what you type in the dive form is kept on the device until you save, so leaving the screen by accident loses nothing. Incomplete dives can be saved as **drafts**.
 
 ## Develop
 
@@ -38,7 +40,7 @@ npm run sites     # refresh client/public/sites.json from OpenStreetMap (Overpas
 | Names, taxonomy, synonyms, traits, distribution | [WoRMS REST](https://www.marinespecies.org/rest/) | Fuzzy scientific matching uses WoRMS TAXAMATCH |
 | Hebrew & extra English names, summaries | Wikidata (P850 = WoRMS ID), Hebrew/English Wikipedia | Wikipedia text is CC BY-SA and attributed on screen |
 | Photos | Wikimedia Commons and GBIF | **Only images whose own license is Public Domain or CC0** |
-| Rarity | GBIF occurrence counts | ≥100k Common · ≥10k Uncommon · ≥1k Rare · ≥100 Very rare · <100 Exceptional. Score is `10 − 1.6·log10(n+1)` |
+| Local frequency | GBIF occurrence records near the sighting | See **Local frequency & special encounters** below |
 | Size class | WoRMS "Body size" trait for that exact taxon | Never guessed |
 | Alerts (invasive / IUCN / CITES) | WoRMS distribution & attribute records | Shown only when explicitly recorded |
 | Dive sites | OpenStreetMap `sport=scuba_diving` (bundled snapshot) | ODbL, attributed |
@@ -54,6 +56,42 @@ npm run sites     # refresh client/public/sites.json from OpenStreetMap (Overpas
 
 Real photographs rank above historical drawings. Credits appear on every photo.
 
+## Local frequency & special encounters
+
+Two separate ideas, never mixed together:
+
+- **Local frequency** (`client/src/core/rarity.js`) is computed from GBIF records within 100 km of where you saw the species.
+  - **How:** it ranks the species among all species of its group recorded there. The group is the GBIF class, or the order when GBIF has no class or the class includes land animals.
+  - **Bands:** top quarter = *frequently recorded*, middle half = *occasionally*, bottom quarter = *rarely recorded*, or *no nearby records*.
+  - **Why ranking:** comparing against neighbours cancels out how heavily an area is sampled.
+  - **Not rated:** areas with fewer than 300 group records or 8 species.
+  - **Caveat:** it describes recording frequency, not true abundance, and never produces a numeric score.
+  - **Cost:** one cached request per group and area.
+- **Special encounter** is the diver's own star on a sighting.
+  - **Pre-starred:** species from groups many divers treat as highlights (mantas, sharks, turtles, cetaceans, seahorses, … — `core/highlights.js`) start starred when added.
+  - **Your choice:** you can unstar them. Nothing claims they are rare.
+- **Dive Highlight** on a journal page is the species *you* pick when logging the dive.
+  - **No pick:** the page uses one of your dive photos, or a clean layout. Nothing is inferred automatically.
+
+## Photos: how they load fast
+
+Measured on a cold start with 23 species, simulated slow 3G and a 4× slower CPU (`npm run build` + the scripts used during development):
+
+| | Before | After |
+| --- | --- | --- |
+| First photo visible | 36 s | 1.1 s |
+| All 23 photos | ~37 s, 1 missing | 5.7 s, none missing |
+| Rate-limited / failed requests | 37 | 0 |
+| Second visit (first screen) | — | 0.6 s, no API requests |
+
+What changed:
+
+- **Parallel lookups:** each species' verified photo list (`getPhotos`) is its own small lookup (Commons first, GBIF only when needed), separate from names and traits.
+- **Per-card loading:** cards load independently, visible ones first, with request caps per host. GBIF requests are spaced ≥400 ms apart, because it rejects bursts with HTTP 429, and `Retry-After` is respected.
+- **Sized images:** thumbnails use standard, edge-cached Wikimedia sizes (WebP) and iNaturalist's small renditions. Large images load only on the species page, progressively.
+- **Fallback:** a photo that fails is remembered and replaced by the next verified photo of the *same* species, never another species.
+- **Caching:** photo URLs and metadata are cached on the device (IndexedDB, 14–30 days), and image files by the service worker.
+
 ## Search
 
 `client/src/core/search.js` merges:
@@ -64,6 +102,7 @@ Real photographs rank above historical drawings. Credits appear on every photo.
 4. **Wikidata** for English common names, and **Hebrew Wikipedia** for Hebrew queries.
 
 Filters: animal group (from WoRMS taxonomy), size class and region (WoRMS distribution). Species without verified size or region data are left out of those filters.
+Completed searches are reused for 10 minutes; results show names immediately and photos as they arrive.
 
 ## Layout
 

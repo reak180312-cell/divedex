@@ -24,6 +24,7 @@ export interface SpeciesCard {
   authority?: string | null;
   rank?: string | null;
   family?: string | null;
+  suggestSpecial?: boolean;
   nameEn?: string | null;
   nameHe?: string | null;
   group?: string | null;
@@ -33,6 +34,9 @@ export interface SpeciesCard {
   gbifCount?: number | null;
   rarity?: Rarity | null;
   image?: SpeciesImage | null;
+  /** verified photo candidates, best first (all of this species) */
+  images?: SpeciesImage[];
+  photosFresh?: boolean;
   wormsUrl: string;
   enriched?: boolean;
   // search-only
@@ -64,7 +68,8 @@ export interface WikiSummary { lang: string; title: string; extract: string; url
 
 export interface Photo { id: number; aphiaId: number | null; width?: number | null; height?: number | null; caption?: string | null; url: string; local?: boolean }
 
-export interface Sighting { aphiaId: number; count: number; species: SpeciesCard | null }
+/** `special`: the diver marked this encounter as special (their own judgement, not a rarity claim). */
+export interface Sighting { aphiaId: number; count: number; special?: boolean; species: SpeciesCard | null }
 
 export type Light = 'day' | 'night' | 'dusk';
 export type Current = 'none' | 'mild' | 'moderate' | 'strong';
@@ -90,15 +95,22 @@ export interface DiveFields {
   light?: Light | null;
   current?: Current | null;
   suit?: string | null;
+  /** minutes; entered by hand or derived from start/end time */
+  duration?: number | null;
+  /** AphiaID of the species featured as the journal page's "Dive Highlight" (diver's choice) */
+  highlight?: number | null;
+  /** incomplete dive saved for later — not shown in the journal, map or collection */
+  draft?: boolean;
 }
 
 export interface Dive extends DiveFields {
   id: number;
   clientId?: string | null;
   number?: number;
+  createdAt?: string;
+  updatedAt?: string;
   sightings: Sighting[];
   photos: Photo[];
-  pending?: boolean; // saved offline, waiting to sync
 }
 
 export interface CollectionEntry extends SpeciesCard {
@@ -112,6 +124,12 @@ export interface CollectionEntry extends SpeciesCard {
   dayDives: number;
   areas: string[];
   sites: string[];
+  special: boolean;
+  /** most recent sighting location (for local record frequency) */
+  lastLat: number | null;
+  lastLon: number | null;
+  lastArea: string | null;
+  manual: number;
 }
 
 export interface User { id: number; email: string; name: string; prefs: { nameLang?: 'en' | 'he' }; createdAt: string }
@@ -122,4 +140,16 @@ export type SiteTuple = [string, string | null, number, number, number | null, s
 export interface SiteDetail {
   id: string; name: string | null; lat: number; lon: number; maxDepth: number | null; type: string | null;
   entry: string | null; difficulty: string | null; description: string | null; website: string | null; place: string | null; osmUrl: string;
+}
+
+export type LocalBand = 'frequent' | 'occasional' | 'rare' | 'none' | 'unrated';
+export interface LocalFrequency {
+  band: LocalBand; records: number | null; rank: number | null; peers: number | null;
+  groupRecords: number | null; groupName: string | null; radiusKm: number;
+}
+
+/** A place where the diver has logged at least one (non-draft) dive. */
+export interface MySite {
+  key: string; name: string; siteRef: string | null; lat: number; lon: number; area: string | null;
+  count: number; lastDate: string; dives: { id: number; number: number; date: string; maxDepth: number | null }[];
 }

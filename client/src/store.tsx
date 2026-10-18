@@ -9,13 +9,16 @@ interface Store {
   user: User | null;
   booting: boolean;
   setUser: (u: User | null) => void;
+  /** saved dives, oldest first (numbered) */
   dives: Dive[];
+  /** incomplete dives saved for later */
+  drafts: Dive[];
   collection: CollectionEntry[];
   loaded: boolean;
   loadError: string | null;
   online: boolean;
   refresh: () => Promise<void>;
-  saveDive: (input: { id?: number; fields: DiveFields; sightings: Sighting[]; newPhotos: NewPhoto[] }) => Promise<{ dive: Dive }>;
+  saveDive: (input: { id?: number; fields: DiveFields; sightings: Sighting[]; newPhotos: NewPhoto[]; draft?: boolean }) => Promise<{ dive: Dive }>;
   deleteDive: (id: number) => Promise<void>;
   deletePhoto: (id: number) => Promise<void>;
   uploadPhoto: (p: { blob: Blob; width: number; height: number; diveId?: number | null; aphiaId?: number | null; caption?: string | null }) => Promise<Photo>;
@@ -34,6 +37,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [dives, setDives] = useState<Dive[]>([]);
+  const [drafts, setDrafts] = useState<Dive[]>([]);
   const [collection, setCollection] = useState<CollectionEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -52,7 +56,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const [d, c] = await Promise.all([api.get<{ dives: Dive[] }>('/api/dives'), api.get<{ species: CollectionEntry[] }>('/api/collection')]);
-      setDives(d.dives);
+      setDives(d.dives.filter((x) => !x.draft));
+      setDrafts(d.dives.filter((x) => x.draft));
       setCollection(c.species);
       setLoadError(null);
     } catch (e) {
@@ -78,8 +83,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return (await api.post<{ photo: Photo }>('/api/photos', fd)).photo;
   }, []);
 
-  const saveDive: Store['saveDive'] = useCallback(async ({ id, fields, sightings, newPhotos }) => {
-    const body = { ...fields, sightings: sightings.map((s) => ({ aphiaId: s.aphiaId, count: s.count })) };
+  const saveDive: Store['saveDive'] = useCallback(async ({ id, fields, sightings, newPhotos, draft = false }) => {
+    const body = { ...fields, draft, sightings: sightings.map((s) => ({ aphiaId: s.aphiaId, count: s.count, special: !!s.special })) };
     const { dive } = id ? await api.put<{ dive: Dive }>(`/api/dives/${id}`, body) : await api.post<{ dive: Dive }>('/api/dives', body);
     for (const p of newPhotos) await uploadPhoto({ ...p, diveId: dive.id });
     await refresh();
@@ -97,8 +102,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value: Store = useMemo(() => ({
-    user, booting, setUser, dives, collection, loaded, loadError, online,
+    user, booting, setUser, dives, drafts, collection, loaded, loadError, online,
     refresh, saveDive, deleteDive, deletePhoto, uploadPhoto, nameLang, setNameLang,
-  }), [user, booting, dives, collection, loaded, loadError, online, refresh, saveDive, deleteDive, deletePhoto, uploadPhoto, nameLang, setNameLang]);
+  }), [user, booting, dives, drafts, collection, loaded, loadError, online, refresh, saveDive, deleteDive, deletePhoto, uploadPhoto, nameLang, setNameLang]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

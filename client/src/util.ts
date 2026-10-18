@@ -1,11 +1,12 @@
-import type { Rarity, SpeciesCard, Dive, SizeClass } from './types';
+import type { SpeciesCard, Dive, SizeClass, LocalBand } from './types';
 
-export const RARITY_META: Record<Rarity, { label: string; color: string; order: number }> = {
-  common: { label: 'Common', color: '#4fd38a', order: 0 },
-  uncommon: { label: 'Uncommon', color: '#45a9ff', order: 1 },
-  rare: { label: 'Rare', color: '#b277ff', order: 2 },
-  'very-rare': { label: 'Very rare', color: '#ffb547', order: 3 },
-  exceptional: { label: 'Exceptional', color: '#ff6b7f', order: 4 },
+/** Local record frequency bands (see core/rarity.js). Order = least to most recorded, for sorting. */
+export const LOCAL_META: Record<LocalBand, { label: string; short: string; color: string | null; order: number }> = {
+  none: { label: 'No nearby records', short: 'No nearby records', color: '#ffb547', order: 0 },
+  rare: { label: 'Rarely recorded here', short: 'Rarely recorded', color: '#b277ff', order: 1 },
+  occasional: { label: 'Occasionally recorded here', short: 'Occasional', color: '#45a9ff', order: 2 },
+  frequent: { label: 'Frequently recorded here', short: 'Frequent', color: '#4fd38a', order: 3 },
+  unrated: { label: 'Not rated', short: 'Not rated', color: null, order: 4 },
 };
 
 export const SIZE_META: Record<SizeClass, { label: string; range: string }> = {
@@ -22,15 +23,6 @@ export const GROUP_LABELS: Record<string, string> = {
   echinoderms: 'Echinoderms', 'corals-anemones': 'Corals & anemones', 'jellies-hydroids': 'Jellies & hydroids',
   sponges: 'Sponges', worms: 'Marine worms', tunicates: 'Tunicates', 'algae-plants': 'Algae & seagrass', other: 'Other',
 };
-
-/**
- * 1–10 score derived from the number of GBIF occurrence records worldwide (log scale).
- * It reflects how often a species is recorded, not its conservation status.
- */
-export function rarityScore(count: number | null | undefined): number | null {
-  if (count == null) return null;
-  return Math.max(1, Math.min(10, Math.round(10 - Math.log10(count + 1) * 1.6)));
-}
 
 export type NameLang = 'en' | 'he';
 
@@ -63,18 +55,26 @@ export function fmtTime(t: string | null | undefined) {
   return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-export function durationMin(d: Pick<Dive, 'startTime' | 'endTime'>) {
+/** Minutes between two HH:MM times (handles midnight); null if not plausible. */
+export function minutesBetween(start?: string | null, end?: string | null) {
+  if (!start || !end) return null;
+  const [a, b] = [start, end].map((t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; });
+  const diff = b >= a ? b - a : b + 1440 - a;
+  return diff > 0 && diff < 600 ? diff : null;
+}
+
+/** A dive's duration: the entered value, else derived from start/end time. */
+export function durationMin(d: Pick<Dive, 'startTime' | 'endTime' | 'duration'>) {
+  if (d.duration != null) return d.duration;
   if (!d.startTime || !d.endTime) return null;
   const [a, b] = [d.startTime, d.endTime].map((t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; });
   const diff = b >= a ? b - a : b + 1440 - a;
   return diff > 0 && diff < 600 ? diff : null;
 }
 
-/** The rarest species seen on a dive = fewest GBIF records worldwide (unknown counts rank last). */
-export function rarestSighting(d: Dive) {
-  const list = d.sightings.filter((s) => s.species);
-  if (!list.length) return null;
-  return [...list].sort((a, b) => (a.species!.gbifCount ?? Infinity) - (b.species!.gbifCount ?? Infinity))[0];
+/** The species the diver chose to feature on this journal page, if any (never inferred). */
+export function highlightSighting(d: Dive) {
+  return d.highlight != null ? d.sightings.find((s) => s.aphiaId === d.highlight && s.species) ?? null : null;
 }
 
 export const todayISO = () => {

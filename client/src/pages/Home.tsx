@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom';
 import MapView, { MAP_CREDIT, SatImage, type MapPoint } from '../components/MapView';
 import Journal from '../components/Journal';
 import { Icon } from '../components/Icon';
+import { Sheet } from '../components/ui';
 import { useStore } from '../store';
-import { useSites } from '../hooks';
 import { api } from '../api';
-import type { SiteDetail, SiteTuple } from '../types';
+import type { MySite } from '../types';
+import { fmtDate } from '../util';
 
 export function distKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   const R = 6371, r = Math.PI / 180;
@@ -15,134 +16,124 @@ export function distKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-const RADIUS_KM = 30;
+/** The diver's own sites (every place with at least one saved dive), refreshed whenever dives change. */
+export function useMySites() {
+  const { dives } = useStore();
+  const [sites, setSites] = useState<MySite[] | null>(null);
+  const key = dives.map((d) => `${d.id}:${d.lat},${d.lon}:${d.siteName}:${d.date}`).join('|');
+  useEffect(() => {
+    let live = true;
+    api.get<{ sites: MySite[] }>('/api/mysites').then((r) => live && setSites(r.sites)).catch(() => live && setSites([]));
+    return () => { live = false; };
+  }, [key]);
+  return sites;
+}
 
 export default function Home() {
-  const { dives, user, nameLang } = useStore();
-  const sites = useSites();
+  const { dives, user, nameLang, loaded } = useStore();
+  const sites = useMySites();
+  const [slide, setSlide] = useState(0);
+  const [openSite, setOpenSite] = useState<MySite | null>(null);
   const [journalIndex, setJournalIndex] = useState<number | null>(null);
 
-  // Focus the map on the dive open in the journal (or the latest located dive).
-  const focusDive = useMemo(() => {
-    const located = dives.filter((d) => d.lat != null && d.lon != null);
-    if (journalIndex != null && dives[journalIndex]?.lat != null) return dives[journalIndex];
-    return located[located.length - 1] ?? null;
-  }, [dives, journalIndex]);
+  // When the journal turns to a dive, show that dive's site on the map.
+  useEffect(() => {
+    const d = journalIndex != null ? dives[journalIndex] : null;
+    if (!d || !sites) return;
+    const i = sites.findIndex((s) => s.dives.some((x) => x.id === d.id));
+    if (i >= 0) setSlide(i);
+  }, [journalIndex, sites]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const nearby = useMemo(() => {
-    if (!sites || !focusDive) return [];
-    return sites
-      .map((s) => ({ s, km: distKm(focusDive.lat!, focusDive.lon!, s[2], s[3]) }))
-      .filter((x) => x.km <= RADIUS_KM && x.s[1])
-      .sort((a, b) => a.km - b.km)
-      .slice(0, 40)
-      .map((x) => x.s);
-  }, [sites, focusDive]);
-
-  const [slide, setSlide] = useState(0);
-  useEffect(() => setSlide(0), [focusDive?.id]);
-  const current: SiteTuple | undefined = nearby[slide];
-
-  const points: MapPoint[] = useMemo(() => {
-    if (focusDive) {
-      const pts: MapPoint[] = nearby.map((s) => ({ id: s[0], lat: s[2], lon: s[3], label: s[1], kind: 'site' }));
-      pts.push({ id: `dive-${focusDive.id}`, lat: focusDive.lat!, lon: focusDive.lon!, label: focusDive.siteName, kind: 'mine' });
-      return pts;
-    }
-    return (sites || []).map((s) => ({ id: s[0], lat: s[2], lon: s[3], label: s[1], kind: 'site' as const }));
-  }, [nearby, focusDive, sites]);
-
-  const areaName = focusDive?.area?.split(',')[0] || focusDive?.siteName;
+  const current = sites?.[Math.min(slide, (sites?.length ?? 1) - 1)] ?? null;
+  const points: MapPoint[] = useMemo(() => (sites || []).map((s) => ({ id: s.key, lat: s.lat, lon: s.lon, label: `${s.name} · ${s.count} dive${s.count > 1 ? 's' : ''}`, kind: 'mine' })), [sites]);
+  const totalDives = dives.length;
+  const areaName = current?.area?.split(',')[0] || current?.name;
 
   return (
     <main className="page">
-      <section className="sites-card" aria-label="Dive sites map">
-        <div className="sites-map">
-          <MapView
-            points={points}
-            bare
-            cluster={!focusDive}
-            fit={!!focusDive}
-            center={[20, 20]}
-            zoom={1.6}
-            selectedId={current?.[0] ?? null}
-            flyTo={current ? { lat: current[2], lon: current[3], key: current[0], zoom: 13 } : null}
-            areaLabel={focusDive && areaName ? { lat: focusDive.lat!, lon: focusDive.lon!, text: areaName } : null}
-            onSelect={(p) => { const i = nearby.findIndex((s) => s[0] === p.id); if (i >= 0) setSlide(i); }}
-          />
-        </div>
-        <div className="sites-title">
-          {sites == null ? <h2>Loading dive sites…</h2> : focusDive ? (
-            <>
-              <h2>{nearby.length} Dive Site{nearby.length === 1 ? '' : 's'}</h2>
-              <p>near {focusDive.area || focusDive.siteName}</p>
-            </>
-          ) : (
-            <>
-              <h2>{sites.length ? `${sites.length.toLocaleString()} Dive Sites` : 'Dive Sites'}</h2>
-              <p>{sites.length ? 'around the world' : 'still loading from OpenStreetMap…'}</p>
-            </>
-          )}
-        </div>
-        {nearby.length > 1 && (
+      <section className="sites-card" aria-label="Your dive sites">
+        {sites && sites.length > 0 ? (
           <>
-            <button className="map-arrow l" aria-label="Previous site" onClick={() => setSlide((s) => (s - 1 + nearby.length) % nearby.length)}><Icon name="left" size={26} /></button>
-            <button className="map-arrow r" aria-label="Next site" onClick={() => setSlide((s) => (s + 1) % nearby.length)}><Icon name="right" size={26} /></button>
-          </>
-        )}
-        {current ? (
-          <>
-            <div className="site-strip"><SiteCard site={current} /></div>
-            <div className="dots" aria-hidden="true">
-              {nearby.slice(0, Math.min(nearby.length, 7)).map((_, i) => <i key={i} className={i === slide % 7 ? 'on' : ''} />)}
+            <div className="sites-map">
+              <MapView
+                points={points}
+                bare
+                fit
+                cluster={sites.length > 40}
+                selectedId={current?.key ?? null}
+                flyTo={current && sites.length > 1 ? { lat: current.lat, lon: current.lon, key: current.key, zoom: 11 } : null}
+                areaLabel={current && areaName ? { lat: current.lat, lon: current.lon, text: areaName } : null}
+                onSelect={(p) => { const i = sites.findIndex((s) => s.key === p.id); if (i >= 0) { setSlide(i); setOpenSite(sites[i]); } }}
+              />
             </div>
+            <div className="sites-title">
+              <h2>{sites.length} Dive Site{sites.length === 1 ? '' : 's'}</h2>
+              <p>{totalDives} dive{totalDives === 1 ? '' : 's'} logged{current?.area ? ` · ${current.area}` : ''}</p>
+            </div>
+            {sites.length > 1 && (
+              <>
+                <button className="map-arrow l" aria-label="Previous site" onClick={() => setSlide((x) => (x - 1 + sites.length) % sites.length)}><Icon name="left" size={26} /></button>
+                <button className="map-arrow r" aria-label="Next site" onClick={() => setSlide((x) => (x + 1) % sites.length)}><Icon name="right" size={26} /></button>
+              </>
+            )}
+            {current && (
+              <div className="site-strip">
+                <button className="site-card" onClick={() => setOpenSite(current)} style={{ width: '100%', textAlign: 'left' }}>
+                  <div className="site-thumb"><SatImage lat={current.lat} lon={current.lon} zoom={12} alt={`Satellite view of ${current.name}`} /></div>
+                  <div className="site-info">
+                    <h3><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} dir="auto">{current.name}</span><Icon name="right" size={18} style={{ marginLeft: 'auto', flex: 'none' }} /></h3>
+                    <div className="site-meta">
+                      <span><Icon name="log" size={16} />{current.count} dive{current.count > 1 ? 's' : ''}</span>
+                      <span><Icon name="calendar" size={16} />Last {fmtDate(current.lastDate)}</span>
+                    </div>
+                    {current.area && <p className="site-desc" dir="auto">{current.area}</p>}
+                  </div>
+                </button>
+              </div>
+            )}
+            {sites.length > 1 && (
+              <div className="dots" aria-hidden="true">
+                {sites.slice(0, 7).map((_, i) => <i key={i} className={i === Math.min(slide, 6) ? 'on' : ''} />)}
+              </div>
+            )}
+            <div className="map-credit">{MAP_CREDIT}</div>
           </>
+        ) : sites === null || !loaded ? (
+          <div className="sites-map photo" aria-label="Loading your dive map" />
         ) : (
-          <div style={{ padding: '12px 16px 14px', fontSize: 14 }} className="muted">
-            {focusDive ? `No mapped dive sites within ${RADIUS_KM} km of this dive in OpenStreetMap yet.` : 'Log a dive to see the sites around it. Explore every mapped site in the Dive Sites tab.'}
+          <div className="map-empty">
+            <div className="map-empty-art" aria-hidden="true"><Icon name="sites" size={46} /></div>
+            <h2>Your dive map starts here</h2>
+            <p>Every place you log a dive appears on this map — one pin per site, with all your dives there.{dives.length === 0 ? '' : ' Your dives so far have no location yet: edit a dive and choose where it was.'}</p>
+            <div className="row" style={{ justifyContent: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <Link to="/log/new" className="btn btn-primary"><Icon name="plus" size={18} />Log a dive</Link>
+              <Link to="/sites" className="btn">Explore dive sites</Link>
+            </div>
           </div>
         )}
-        <div className="map-credit">{MAP_CREDIT}</div>
       </section>
 
-      <Journal
-        dives={dives}
-        nameLang={nameLang}
-        ownerName={user?.name || ''}
-        onIndexChange={setJournalIndex}
-      />
+      <Journal dives={dives} nameLang={nameLang} ownerName={user?.name || ''} onIndexChange={setJournalIndex} />
 
       <Link to="/log/new" className="btn btn-primary btn-big" style={{ marginTop: 18 }}><Icon name="plus" /> Log a new dive</Link>
+
+      <Sheet open={!!openSite} onClose={() => setOpenSite(null)} title={openSite?.name}>
+        {openSite && (
+          <div className="stack">
+            <p className="muted" style={{ margin: 0 }}>
+              {openSite.count} dive{openSite.count > 1 ? 's' : ''} here · most recent {fmtDate(openSite.lastDate)}{openSite.area ? ` · ${openSite.area}` : ''}
+            </p>
+            {openSite.dives.map((d) => (
+              <Link key={d.id} to={`/log/${d.id}`} className="dive-row glass" onClick={() => setOpenSite(null)}>
+                <span className="dive-num">{d.number}</span>
+                <span style={{ flex: 1 }}>{fmtDate(d.date)}{d.maxDepth != null ? <span className="muted"> · {d.maxDepth} m</span> : null}</span>
+                <Icon name="right" />
+              </Link>
+            ))}
+            {openSite.siteRef && <Link to={`/sites?site=${encodeURIComponent(openSite.siteRef)}`} className="btn" onClick={() => setOpenSite(null)}>Site details</Link>}
+          </div>
+        )}
+      </Sheet>
     </main>
-  );
-}
-
-const detailCache = new Map<string, SiteDetail>();
-
-function SiteCard({ site }: { site: SiteTuple }) {
-  const [detail, setDetail] = useState<SiteDetail | null>(detailCache.get(site[0]) ?? null);
-  useEffect(() => {
-    if (detailCache.has(site[0])) { setDetail(detailCache.get(site[0])!); return; }
-    setDetail(null);
-    let live = true;
-    api.get<{ site: SiteDetail }>(`/api/sites/${encodeURIComponent(site[0])}`)
-      .then((r) => { detailCache.set(site[0], r.site); if (live) setDetail(r.site); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [site]);
-  const [, name, lat, lon, maxDepth, type] = site;
-  return (
-    <Link to={`/sites?site=${encodeURIComponent(site[0])}`} className="site-card">
-      <div className="site-thumb"><SatImage lat={lat} lon={lon} zoom={15} alt={`Satellite view of ${name}`} /></div>
-      <div className="site-info">
-        <h3><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span><Icon name="right" size={18} style={{ marginLeft: 'auto', flex: 'none' }} /></h3>
-        <div className="site-meta">
-          {maxDepth != null && <span><Icon name="waves" size={17} />{maxDepth} m max</span>}
-          {type && <span><Icon name="layers" size={16} />{type}</span>}
-          {detail?.entry && <span><Icon name="diver" size={16} />{detail.entry} entry</span>}
-        </div>
-        <p className="site-desc">{detail?.description || (detail ? 'Mapped dive site from OpenStreetMap.' : '')}</p>
-      </div>
-    </Link>
   );
 }

@@ -1,22 +1,24 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
-import { Img, RarityBadge, Sheet } from '../components/ui';
-import { srcSetFor } from '../img';
+import { LocalBadge, Sheet, SpecialMark, SpeciesPhoto } from '../components/ui';
 import { useStore } from '../store';
-import { useClickOutside, useEnrichedCards } from '../hooks';
-import type { CollectionEntry, Rarity, SizeClass } from '../types';
-import { displayName, fmtDate, fmtSize, GROUP_LABELS, RARITY_META, SIZE_META } from '../util';
+import { peekLocal, requestLocal, useBackgroundCards, useClickOutside, useLocalFrequency, useNearViewport, useSpeciesVersion } from '../hooks';
+import type { CollectionEntry, LocalBand, SizeClass } from '../types';
+import { displayName, fmtDate, fmtSize, GROUP_LABELS, LOCAL_META, SIZE_META } from '../util';
 
 type TimeKey = 'any' | '30d' | '365d' | `y${number}`;
-type SortKey = 'recent' | 'rarity' | 'sightings' | 'name';
+type SortKey = 'recent' | 'special' | 'sightings' | 'name';
 
-const SORTS: Record<SortKey, string> = { recent: 'Recently discovered', rarity: 'Rarest first', sightings: 'Most sighted', name: 'Name' };
+const SORTS: Record<SortKey, string> = { recent: 'Recently discovered', special: 'Special encounters first', sightings: 'Most sighted', name: 'Name' };
+const BAND_KEYS: LocalBand[] = ['frequent', 'occasional', 'rare', 'none'];
 
 export default function Collection() {
   const { collection, nameLang, loaded } = useStore();
-  const items = useEnrichedCards(collection);
-  const [rarity, setRarity] = useState<Rarity | null>(null);
+  const items = useBackgroundCards(collection);
+  const [band, setBand] = useState<LocalBand | null>(null);
+  const [special, setSpecial] = useState(false);
+  useSpeciesVersion();
   const [size, setSize] = useState<SizeClass | 'unknown' | null>(null);
   const [time, setTime] = useState<TimeKey>('any');
   const [area, setArea] = useState<string | null>(null);
@@ -29,10 +31,19 @@ export default function Collection() {
   const areas = useMemo(() => [...new Set(items.flatMap((s) => s.areas.length ? s.areas : s.sites))].sort(), [items]);
   const groups = useMemo(() => [...new Set(items.map((s) => s.group).filter(Boolean) as string[])], [items]);
 
-  const filtered = useMemo(() => {
+  // Filtering by local frequency needs it for every species: fetch the rest in the background.
+  useEffect(() => { if (band) for (const s of items) requestLocal(s.aphiaId, s.lastLat, s.lastLon, false); }, [band, items]);
+  let pendingLocal = 0;
+
+  const filtered = (() => {
     const now = Date.now();
     const out = items.filter((s) => {
-      if (rarity && s.rarity !== rarity) return false;
+      if (special && !s.special) return false;
+      if (band) {
+        const l = peekLocal(s.aphiaId, s.lastLat, s.lastLon);
+        if (l === undefined) { pendingLocal++; return false; }
+        if ((l?.band ?? 'unrated') !== band) return false;
+      }
       if (size === 'unknown' ? s.sizeClass : size && s.sizeClass !== size) return false;
       if (group && s.group !== group) return false;
       if (area && !s.areas.includes(area) && !s.sites.includes(area)) return false;
@@ -45,17 +56,16 @@ export default function Collection() {
       }
       return true;
     });
-    const r = (s: CollectionEntry) => (s.rarity ? RARITY_META[s.rarity].order : -1);
     out.sort((a, b) =>
-      sort === 'rarity' ? r(b) - r(a) || (a.gbifCount ?? 1e12) - (b.gbifCount ?? 1e12)
-      : sort === 'sightings' ? b.dives - a.dives
+      sort === 'special' ? Number(b.special) - Number(a.special) || b.lastSeen.localeCompare(a.lastSeen)
+      : sort === 'sightings' ? (b.dives + b.manual) - (a.dives + a.manual)
       : sort === 'name' ? displayName(a, nameLang).localeCompare(displayName(b, nameLang))
       : b.firstSeen.localeCompare(a.firstSeen));
     return out;
-  }, [items, rarity, size, group, area, time, sort, nameLang]);
+  })();
 
-  const anyFilter = rarity || size || time !== 'any' || area || group;
-  const reset = () => { setRarity(null); setSize(null); setTime('any'); setArea(null); setGroup(null); };
+  const anyFilter = band || special || size || time !== 'any' || area || group;
+  const reset = () => { setBand(null); setSpecial(false); setSize(null); setTime('any'); setArea(null); setGroup(null); };
   const setV = (v: 'grid' | 'list') => { setView(v); try { localStorage.setItem('dd:view', v); } catch { /* private mode */ } };
 
   const timeLabel = time === 'any' ? 'Time' : time === '30d' ? 'Last 30 days' : time === '365d' ? 'Last 12 months' : time.slice(1);
@@ -74,15 +84,17 @@ export default function Collection() {
 
       <div className="filters">
         <button className={`chip${!anyFilter ? ' active' : ''}`} onClick={reset}>All</button>
-        <Dropdown label={rarity ? RARITY_META[rarity].label : 'Rarity'} active={!!rarity}>
+        <button className={`chip${special ? ' active' : ''}`} onClick={() => setSpecial((x) => !x)} aria-pressed={special}><Icon name="star" size={15} />Special</button>
+        <Dropdown label={band ? LOCAL_META[band].short : 'Local'} active={!!band}>
           {(close) => (
             <>
-              <MenuItem on={!rarity} onClick={() => { setRarity(null); close(); }}>Any rarity</MenuItem>
-              {(Object.keys(RARITY_META) as Rarity[]).map((k) => (
-                <MenuItem key={k} on={rarity === k} onClick={() => { setRarity(k); close(); }}>
-                  <i style={{ width: 9, height: 9, borderRadius: '50%', background: RARITY_META[k].color }} />{RARITY_META[k].label}
+              <MenuItem on={!band} onClick={() => { setBand(null); close(); }}>Any local frequency</MenuItem>
+              {BAND_KEYS.map((k) => (
+                <MenuItem key={k} on={band === k} onClick={() => { setBand(k); close(); }}>
+                  <i style={{ width: 9, height: 9, borderRadius: '50%', background: LOCAL_META[k].color ?? undefined }} />{LOCAL_META[k].label}
                 </MenuItem>
               ))}
+              <MenuItem on={band === 'unrated'} onClick={() => { setBand('unrated'); close(); }}>Not rated (too few records)</MenuItem>
             </>
           )}
         </Dropdown>
@@ -136,7 +148,7 @@ export default function Collection() {
         </div>
       ) : (
         <>
-          {anyFilter && <p className="muted" style={{ margin: '0 0 10px', fontSize: 14 }}>{filtered.length} of {items.length} species</p>}
+          {anyFilter && <p className="muted" style={{ margin: '0 0 10px', fontSize: 14 }}>{filtered.length} of {items.length} species{pendingLocal ? ` · checking local records for ${pendingLocal} more…` : ''}</p>}
           {view === 'grid' ? (
             <div className="sp-grid">
               {filtered.map((s) => <GridCard key={s.aphiaId} s={s} name={displayName(s, nameLang)} />)}
@@ -148,18 +160,18 @@ export default function Collection() {
             <div className="sp-list">
               {filtered.map((s) => (
                 <Link key={s.aphiaId} to={`/species/${s.aphiaId}`} className="sp-row glass">
-                  <div className="thumb"><Img src={s.image?.url} srcSet={srcSetFor(s.image)} sizes="64px" alt={displayName(s, nameLang)} /></div>
+                  <SpeciesPhoto className="thumb" species={s} sizes="64px" maxWidth={250} alt={displayName(s, nameLang)} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="t1" dir="auto">{displayName(s, nameLang)}</div>
                     <div className="t2">{s.scientificName}</div>
-                    <div className="t3">Seen on {s.dives} dive{s.dives > 1 ? 's' : ''} · first {fmtDate(s.firstSeen)}</div>
+                    <div className="t3">{seenText(s)} · first {fmtDate(s.firstSeen)}</div>
                   </div>
-                  <RarityBadge rarity={s.rarity} className="pill-dot" />
+                  {s.special && <SpecialMark className="special-mark small" label={false} />}
                 </Link>
               ))}
             </div>
           )}
-          {filtered.length === 0 && items.length > 0 && (
+          {filtered.length === 0 && items.length > 0 && !pendingLocal && (
             <div className="empty"><p>No species match these filters.</p><button className="btn" onClick={reset}>Clear filters</button></div>
           )}
         </>
@@ -180,8 +192,10 @@ export default function Collection() {
           </>
         )}
         <p className="credits" style={{ marginTop: 20 }}>
-          Rarity reflects how many occurrence records GBIF holds for a species worldwide (Common ≥ 100,000 · Uncommon ≥ 10,000 · Rare ≥ 1,000 · Very rare ≥ 100 · Exceptional &lt; 100).
-          Size is the maximum body length recorded in WoRMS traits. Depth ranges and day/night come from your own dives.
+          <b>Local frequency</b> ranks a species among the species of its group with GBIF records within {100} km of where you last saw it:
+          frequent (top quarter), occasional (middle half), rarely recorded (bottom quarter), or no nearby records. It reflects where people
+          record wildlife, not true abundance, and shows nothing when an area has too few records to judge.
+          <br /><b>Special</b> marks the encounters you starred yourself. Size is the maximum body length in WoRMS; depth and day/night come from your dives.
         </p>
         <button className="btn btn-primary btn-big" style={{ marginTop: 10 }} onClick={() => setSheet(false)}>Show {filtered.length} species</button>
       </Sheet>
@@ -189,14 +203,21 @@ export default function Collection() {
   );
 }
 
+const seenText = (s: CollectionEntry) => {
+  const n = s.dives + s.manual;
+  return s.dives ? `Seen on ${s.dives} dive${s.dives > 1 ? 's' : ''}${s.manual ? ` + ${s.manual} more` : ''}` : `Seen ${n} time${n > 1 ? 's' : ''}`;
+};
+
 function GridCard({ s, name }: { s: CollectionEntry; name: string }) {
   const depth = s.depthMin != null && s.depthMax != null ? (s.depthMin === s.depthMax ? `${s.depthMax} m` : `${s.depthMin}–${s.depthMax} m`) : null;
   const night = s.nightDives > s.dayDives;
+  const [ref, near] = useNearViewport<HTMLAnchorElement>(200);
+  const local = useLocalFrequency(s.aphiaId, s.lastLat, s.lastLon, near);
   return (
-    <Link to={`/species/${s.aphiaId}`} className="sp-card">
-      <Img src={s.image?.url} srcSet={srcSetFor(s.image)} sizes="(max-width: 520px) 50vw, 260px" alt={name} />
-      <span className="sp-count" title={`Seen on ${s.dives} dive${s.dives > 1 ? 's' : ''}`}>{s.dives}</span>
-      <RarityBadge rarity={s.rarity} />
+    <Link ref={ref} to={`/species/${s.aphiaId}`} className="sp-card">
+      <SpeciesPhoto species={s} sizes="(max-width: 520px) 46vw, 240px" maxWidth={500} alt={name} />
+      <span className="sp-count" title={seenText(s)}>{s.dives + s.manual}{s.special && <SpecialMark className="special-mark" label={false} />}</span>
+      <LocalBadge band={local?.band} />
       <div className="sp-foot">
         <div className="sp-name" dir="auto">{name}</div>
         <div className="sp-meta">

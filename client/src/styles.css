@@ -99,7 +99,7 @@ img { display: block; max-width: 100%; }
 .avatar {
   width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 17px;
   background: radial-gradient(circle at 50% 30%, #1f8fa6, #0a3a4a 70%); color: #dffbff;
-  box-shadow: 0 0 0 2px #0a2a35, 0 0 0 4px var(--accent);
+  box-shadow: 0 0 0 2px var(--line-strong);
 }
 
 .bottom-nav {
@@ -112,7 +112,7 @@ img { display: block; max-width: 100%; }
 }
 .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted); text-decoration: none; font-size: 13.5px; position: relative; }
 .nav-item.active { color: var(--accent); font-weight: 600; }
-.nav-item.active::after { content: ''; position: absolute; bottom: 6px; width: 34px; height: 3px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.nav-item.active::after { content: ''; position: absolute; bottom: 6px; width: 34px; height: 3px; border-radius: 2px; background: var(--accent); }
 
 .page { padding: 4px 16px 16px; }
 .page-head { display: flex; align-items: flex-start; gap: 10px; margin: 6px 0 16px; }
@@ -136,7 +136,7 @@ img { display: block; max-width: 100%; }
 }
 .btn:hover { background: rgba(98, 230, 236, .08); }
 .btn:active { transform: scale(.97); }
-.btn-primary { background: linear-gradient(180deg, #8cf3f6, #3fd3e2); color: var(--accent-ink); border: 0; box-shadow: 0 8px 24px rgba(63, 211, 226, .28), inset 0 1px 0 rgba(255,255,255,.5); }
+.btn-primary { background: linear-gradient(180deg, #8cf3f6, #3fd3e2); color: var(--accent-ink); border: 0; box-shadow: 0 4px 14px rgba(0, 0, 0, .25), inset 0 1px 0 rgba(255,255,255,.5); }
 .btn-primary:hover { background: linear-gradient(180deg, #9ef7f9, #4bdbe8); }
 .btn-big { height: 58px; width: 100%; font-size: 19px; border-radius: 22px; }
 .btn-ghost { border-color: transparent; color: var(--muted); }
@@ -219,12 +219,12 @@ img { display: block; max-width: 100%; }
 .site-desc { margin: 6px 0 0; color: #c6dde3; font-size: 13.5px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dots { display: flex; justify-content: center; gap: 8px; padding: 10px 0 12px; }
 .dots i { width: 8px; height: 8px; border-radius: 50%; background: rgba(160, 200, 210, .35); }
-.dots i.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.dots i.on { background: var(--accent); }
 
 /* map markers */
 .dd-pin { width: 30px; height: 38px; filter: drop-shadow(0 3px 6px rgba(0,0,0,.6)); }
-.dd-pin.big { width: 40px; height: 50px; filter: drop-shadow(0 0 12px rgba(98,230,236,.8)); }
-.dd-cluster { display: grid; place-items: center; border-radius: 50%; background: rgba(5, 30, 40, .82); border: 2px solid var(--accent); color: #fff; font-weight: 700; font-size: 13px; box-shadow: 0 0 14px rgba(98,230,236,.45); }
+.dd-pin.big { width: 40px; height: 50px; filter: drop-shadow(0 3px 6px rgba(0,0,0,.6)); }
+.dd-cluster { display: grid; place-items: center; border-radius: 50%; background: rgba(5, 30, 40, .85); border: 2px solid var(--accent); color: #fff; font-weight: 700; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
 .leaflet-container { background: #0a2f3c; font-family: var(--font-ui); }
 .leaflet-control-attribution { background: rgba(3, 17, 26, .7) !important; color: #9ab !important; font-size: 9.5px !important; }
 .leaflet-control-attribution a { color: #bfe !important; }
@@ -521,3 +521,68 @@ img { display: block; max-width: 100%; }
 /* keep Leaflet's internal z-indexes (400–1000) inside their maps so sheets & the reader sit on top */
 .sites-card, .mini-map, .sites-full, .sites-map { isolation: isolate; }
 .sites-full .map-search, .sites-full .map-legend { z-index: 1000; }
+
+/* ---------- species photos (fixed box, shimmer while loading, fade in) ---------- */
+.photo { position: relative; overflow: hidden; background: linear-gradient(100deg, #0d3a48 30%, #135061 50%, #0d3a48 70%) 0 0/300% 100%; animation: shimmer 1.6s infinite linear; }
+.photo.is-loaded, .photo:has(.photo-none) { animation: none; background: #0b3442; }
+.photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .35s ease; }
+.photo.is-loaded img { opacity: 1; }
+.photo-none { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(160, 220, 230, .35); background: radial-gradient(circle at 50% 40%, #12505f, #072630); }
+.sp-card > .photo { position: absolute; inset: 0; z-index: -2; }
+.sp-card > .photo img { transition: opacity .35s ease, transform .4s; }
+.sp-card:hover > .photo img { transform: scale(1.04); }
+.photo.fill { position: absolute; inset: 0; }
+.sp-row .thumb.photo, .result .thumb.photo { position: relative; }
+
+/* special encounter mark (the diver's own star) */
+.special-mark { display: inline-flex; align-items: center; gap: 3px; color: #ffd27a; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.special-mark svg { fill: #ffd27a; }
+.sp-count .special-mark { margin-left: 6px; vertical-align: 2px; }
+.special-mark.small svg { width: 15px; height: 15px; }
+
+/* journal: flexible pages */
+.j-ruled.huge { min-height: 15.5em; -webkit-line-clamp: 10; margin-right: 12%; }
+.j-notes-block.tall { margin-top: 1.2em; }
+.j-more { display: inline-block; margin: .2em 0 0 1.95em; font-size: .95em; color: var(--ink-soft); text-decoration: underline; text-underline-offset: 2px; }
+/* dive finder */
+.finder-list { display: flex; flex-direction: column; gap: 2px; }
+.finder-row { display: flex; align-items: center; gap: 12px; padding: 9px 8px; border-radius: 12px; text-align: left; width: 100%; }
+.finder-row:hover, .finder-row.on { background: rgba(98, 230, 236, .08); }
+.finder-site { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dive-num.small { width: 40px; height: 40px; font-size: 15px; border-radius: 11px; }
+
+.draft-row { border-style: dashed; }
+
+/* personal dive map: empty state */
+.map-empty { padding: 34px 22px 26px; text-align: center; background: radial-gradient(120% 90% at 50% 0%, rgba(98, 230, 236, .12), transparent 60%); }
+.map-empty h2 { margin: 14px 0 6px; font-size: 24px; }
+.map-empty p { margin: 0 auto 16px; max-width: 34ch; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.map-empty-art { width: 84px; height: 84px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center; color: var(--accent); border: 1.5px dashed var(--line-strong); }
+button.site-card { font: inherit; color: inherit; }
+
+/* location picker tabs */
+.seg.tabs { display: flex; width: 100%; }
+.seg.tabs button { flex: 1; gap: 6px; display: inline-flex; align-items: center; justify-content: center; height: 42px; font-size: 14.5px; }
+.loc-thumb.small { width: 54px; height: 54px; border-radius: 10px; overflow: hidden; flex: none; position: relative; }
+
+/* add dive: depth slider, seen-item actions, picker confirmation */
+.depth-field .body { display: flex; flex-direction: column; }
+.depth-range { width: 100%; margin: 8px 0 2px; accent-color: var(--accent); height: 22px; }
+.seen-item { height: 168px; }
+.seen-item .nm { bottom: 38px; }
+.seen-actions { position: absolute; z-index: 2; left: 4px; right: 4px; bottom: 4px; display: flex; gap: 4px; }
+.seen-actions button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 3px; height: 28px; border-radius: 8px; font-size: 11px; font-weight: 600; color: #d6e8ec; background: rgba(3, 18, 26, .75); border: 1px solid rgba(255,255,255,.1); }
+.seen-actions button.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.seen-actions button.on.special { background: #ffd27a; border-color: #ffd27a; color: #3a2600; }
+.seen-actions button.on.special svg { fill: currentColor; }
+.seen-item.is-highlight { border-color: var(--accent); }
+.picker-confirm { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 16px; background: #0d3a48; border: 1px solid var(--line-strong); }
+.picker-confirm span { flex: 1; min-width: 0; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* polish */
+a.btn, a.btn:hover { text-decoration: none; }
+.sp-meta { overflow: hidden; }
+@media (max-width: 400px) {
+  .sp-meta { gap: 7px; font-size: 12px; }
+  .sp-meta svg { width: 14px; height: 14px; }
+}

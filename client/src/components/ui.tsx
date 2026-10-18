@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
-import type { Rarity, SpeciesImage } from '../types';
-import { RARITY_META } from '../util';
+import type { LocalBand, SpeciesCard, SpeciesImage } from '../types';
+import { acquireImageSlot, requestPhotos, useNearViewport } from '../hooks';
+import { isBad, markBad, sourcesFor } from '../img';
+import { LOCAL_META } from '../util';
 
 export function Sheet({ open, onClose, title, children, actions }: { open: boolean; onClose: () => void; title?: ReactNode; children: ReactNode; actions?: ReactNode }) {
   useEffect(() => {
@@ -41,10 +43,61 @@ export function Img({ src, srcSet, sizes, alt, className, fallback, eager }: { s
   return <img src={src} srcSet={srcSet} sizes={srcSet ? sizes : undefined} alt={alt} className={className} loading={eager ? 'eager' : 'lazy'} decoding="async" onError={() => setFailed(true)} referrerPolicy="no-referrer" />;
 }
 
-export function RarityBadge({ rarity, className = 'rarity-badge' }: { rarity?: Rarity | null; className?: string }) {
-  if (!rarity) return null;
-  const m = RARITY_META[rarity];
-  return <span className={className}><i style={{ background: m.color, boxShadow: `0 0 6px ${m.color}` }} />{m.label}</span>;
+/**
+ * A species photo that
+ *  - starts downloading only when near the viewport, and only when one of the global image slots is free;
+ *  - asks for the species' verified photo list if it isn't known yet (fast path, separate from names);
+ *  - on error moves on to the next verified photo *of the same species*, remembering broken URLs;
+ *  - keeps its box size fixed (no layout shift) and fades in once decoded.
+ */
+export function SpeciesPhoto({ species, alt, sizes, maxWidth = 500, className, eager, fallback }: {
+  species: Pick<SpeciesCard, 'aphiaId' | 'image' | 'images' | 'photosFresh'>; alt: string; sizes: string; maxWidth?: number;
+  className?: string; eager?: boolean; fallback?: ReactNode;
+}) {
+  const [ref, near] = useNearViewport<HTMLDivElement>(eager ? 2000 : 400);
+  const candidates = (species.images?.length ? species.images : species.image ? [species.image] : []).filter((i) => !isBad(i.url));
+  const [idx, setIdx] = useState(0);
+  const [slot, setSlot] = useState<null | (() => void)>(null);
+  const [loaded, setLoaded] = useState(false);
+  const cand = candidates[Math.min(idx, candidates.length)] as SpeciesImage | undefined;
+  const src = cand ? sourcesFor(cand, maxWidth) : null;
+
+  // Need the photo list? (unknown yet, or stale) — the scheduler dedupes and prioritises visible items.
+  useEffect(() => { if (near && !species.photosFresh) requestPhotos(species.aphiaId, true); }, [near, species.photosFresh, species.aphiaId]);
+  // Wait for a download slot before setting src; release it when the image settles.
+  useEffect(() => {
+    if (!near || !src || slot || loaded) return;
+    let live = true, release: (() => void) | null = null;
+    acquireImageSlot().then((r) => { if (live) { release = r; setSlot(() => r); } else r(); });
+    return () => { live = false; release?.(); };
+  }, [near, src?.src]); // eslint-disable-line react-hooks/exhaustive-deps
+  const settle = () => { slot?.(); setSlot(null); };
+
+  return (
+    <div ref={ref} className={`photo ${loaded ? 'is-loaded' : ''} ${className || ''}`} role={src ? undefined : 'img'} aria-label={src ? undefined : alt}>
+      {src && (slot || loaded) && (
+        <img
+          key={src.src} src={src.src} srcSet={src.srcSet} sizes={src.srcSet ? sizes : undefined} alt={alt}
+          decoding="async" referrerPolicy="no-referrer" draggable={false}
+          onLoad={() => { setLoaded(true); settle(); }}
+          onError={() => { markBad(cand!.url); setLoaded(false); settle(); setIdx((i) => i + 1); }}
+        />
+      )}
+      {!src && (species.photosFresh || candidates.length === 0 && idx > 0) && <div className="photo-none">{fallback ?? <Icon name="fish" size={30} />}</div>}
+    </div>
+  );
+}
+
+/** Local record frequency band. Renders nothing while loading or when the area can't be rated. */
+export function LocalBadge({ band, className = 'rarity-badge', long }: { band?: LocalBand | null; className?: string; long?: boolean }) {
+  if (!band || band === 'unrated') return null;
+  const m = LOCAL_META[band];
+  return <span className={className} title={m.label}><i style={{ background: m.color ?? undefined }} />{long ? m.label : m.short}</span>;
+}
+
+/** The diver's own "special encounter" mark. */
+export function SpecialMark({ className = 'special-mark', label = true }: { className?: string; label?: boolean }) {
+  return <span className={className} title="You marked this as a special encounter"><Icon name="star" size={13} strokeWidth={2.2} />{label && 'Special'}</span>;
 }
 
 export function Credit({ img, short }: { img: SpeciesImage; short?: boolean }) {

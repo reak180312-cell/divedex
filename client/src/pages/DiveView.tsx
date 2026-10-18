@@ -3,8 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import Journal from '../components/Journal';
 import MapView from '../components/MapView';
-import { Img, RarityBadge, useToast } from '../components/ui';
-import { srcSetFor } from '../img';
+import { SpecialMark, SpeciesPhoto, useToast } from '../components/ui';
 import { useEnrichedCards } from '../hooks';
 import { useStore } from '../store';
 import type { SpeciesCard } from '../types';
@@ -67,12 +66,13 @@ export default function DiveView() {
               const s = d.sightings.find((x) => x.aphiaId === c.aphiaId)!;
               return (
                 <Link key={c.aphiaId} to={`/species/${c.aphiaId}`} className="sp-row">
-                  <div className="thumb"><Img src={c.image?.url} srcSet={srcSetFor(c.image)} sizes="64px" alt={displayName(c, nameLang)} /></div>
+                  <SpeciesPhoto className="thumb" species={c} sizes="64px" maxWidth={250} alt={displayName(c, nameLang)} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="t1" dir="auto">{displayName(c, nameLang)}{s.count > 1 ? <span className="muted"> ×{s.count}</span> : null}</div>
                     <div className="t2">{c.scientificName}</div>
                   </div>
-                  <RarityBadge rarity={c.rarity} className="pill-dot" />
+                  {s.special && <SpecialMark />}
+                  {d.highlight === c.aphiaId && <span className="pill-dot" style={{ color: 'var(--accent)' }}>Highlight</span>}
                 </Link>
               );
             })}

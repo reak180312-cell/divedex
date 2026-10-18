@@ -5,76 +5,107 @@ import { Icon, type IconName } from '../components/Icon';
 import LocationPicker, { type PickedLocation } from '../components/LocationPicker';
 import { SatImage } from '../components/MapView';
 import SpeciesSearch from '../components/SpeciesSearch';
-import { Img, Sheet, useToast } from '../components/ui';
-import { srcSetFor } from '../img';
+import { Sheet, SpeciesPhoto, useToast } from '../components/ui';
 import { useEnrichedCards } from '../hooks';
 import { useStore, type NewPhoto } from '../store';
-import type { Current, DiveFields, Light, Sighting, SpeciesCard } from '../types';
-import { displayName, resizeImage, todayISO, uid } from '../util';
+import type { Current, Dive, DiveFields, Light, Sighting, SpeciesCard } from '../types';
+import { displayName, fmtTime, minutesBetween, resizeImage, todayISO, uid } from '../util';
 
 type Num = string; // numeric inputs are kept as strings while editing
 interface Form {
-  date: string; startTime: string; endTime: string; buddy: string;
+  date: string; startTime: string; endTime: string; duration: Num; buddy: string;
   startBar: Num; endBar: Num; maxDepth: Num; avgDepth: Num; weights: Num; waterTemp: Num; visibility: Num;
   light: Light | ''; current: Current | ''; suit: string; notes: string;
 }
-const EMPTY: Form = { date: todayISO(), startTime: '', endTime: '', buddy: '', startBar: '', endBar: '', maxDepth: '', avgDepth: '', weights: '', waterTemp: '', visibility: '', light: '', current: '', suit: '', notes: '' };
+const EMPTY: Form = { date: todayISO(), startTime: '', endTime: '', duration: '', buddy: '', startBar: '', endBar: '', maxDepth: '', avgDepth: '', weights: '', waterTemp: '', visibility: '', light: '', current: '', suit: '', notes: '' };
 
 const LIMITS: Partial<Record<keyof Form, [number, number, string]>> = {
   startBar: [0, 350, 'bar'], endBar: [0, 350, 'bar'], maxDepth: [0, 350, 'm'], avgDepth: [0, 350, 'm'],
-  weights: [0, 40, 'kg'], waterTemp: [-3, 40, '°C'], visibility: [0, 100, 'm'],
+  weights: [0, 40, 'kg'], waterTemp: [-3, 40, '°C'], visibility: [0, 100, 'm'], duration: [1, 600, 'min'],
 };
+const DEPTH_SLIDER_MAX = 60;
+
+/** Everything typed so far — kept in localStorage so leaving the screen by accident loses nothing. */
+interface Autosave { form: Form; loc: PickedLocation; seen: Sighting[]; highlight: number | null; durManual: boolean; at: number }
+const autosaveKey = (editId: number | null) => `dd:unsaved:${editId ?? 'new'}`;
+const readAutosave = (k: string): Autosave | null => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
 
 export default function LogDive() {
   const { id } = useParams();
   const editId = id ? Number(id) : null;
   const [params] = useSearchParams();
   const nav = useNavigate();
-  const { dives, saveDive, deletePhoto, nameLang } = useStore();
-  const editing = editId != null ? dives.find((d) => d.id === editId) : undefined;
+  const { dives, drafts, saveDive, deletePhoto, nameLang } = useStore();
+  const editing: Dive | undefined = editId != null ? [...dives, ...drafts].find((d) => d.id === editId) : undefined;
+  const isDraft = !!editing?.draft;
 
   const [form, setForm] = useState<Form>(EMPTY);
+  const [durManual, setDurManual] = useState(false);
   const [loc, setLoc] = useState<PickedLocation>({ siteName: '', siteRef: null, lat: null, lon: null });
   const [seen, setSeen] = useState<Sighting[]>([]);
+  const [highlight, setHighlight] = useState<number | null>(null);
   const [photos, setPhotos] = useState<NewPhoto[]>([]);
   const [buddies, setBuddies] = useState<string[]>([]);
   const [picker, setPicker] = useState(false);
   const [locOpen, setLocOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<null | 'save' | 'draft'>(null);
   const [errors, setErrors] = useState<Partial<Record<keyof Form | 'site', string>>>({});
+  const [restored, setRestored] = useState<number | null>(null);
   const [toast, setToast] = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const hydrated = useRef(false);
+  const dirty = useRef(false);
+  const akey = autosaveKey(editId);
 
-  // Prefill when editing
+  // Prefill: unsaved edits first (if newer than the saved record), else the saved dive, else sensible carry-overs.
   useEffect(() => {
-    if (!editing || hydrated.current) return;
+    if (hydrated.current) return;
+    if (editId != null && !editing) return; // wait for the store
     hydrated.current = true;
-    const s = (v: number | null | undefined) => (v == null ? '' : String(v));
-    setForm({
-      date: editing.date, startTime: editing.startTime || '', endTime: editing.endTime || '', buddy: editing.buddy || '',
-      startBar: s(editing.startBar), endBar: s(editing.endBar), maxDepth: s(editing.maxDepth), avgDepth: s(editing.avgDepth),
-      weights: s(editing.weights), waterTemp: s(editing.waterTemp), visibility: s(editing.visibility),
-      light: editing.light || '', current: editing.current || '', suit: editing.suit || '', notes: editing.notes || '',
-    });
-    setLoc({ siteName: editing.siteName, siteRef: editing.siteRef || null, lat: editing.lat ?? null, lon: editing.lon ?? null });
-    setSeen(editing.sightings);
-  }, [editing]);
+    const auto = readAutosave(akey);
+    const savedAt = editing ? Date.parse(editing.updatedAt ?? '') || 0 : 0;
+    if (auto && auto.at > savedAt) {
+      setForm({ ...EMPTY, ...auto.form }); setLoc(auto.loc); setSeen(auto.seen); setHighlight(auto.highlight); setDurManual(auto.durManual);
+      setRestored(auto.at);
+      return;
+    }
+    if (editing) {
+      const s = (v: number | null | undefined) => (v == null ? '' : String(v));
+      const derived = minutesBetween(editing.startTime, editing.endTime);
+      setForm({
+        date: editing.date || '', startTime: editing.startTime || '', endTime: editing.endTime || '',
+        duration: s(editing.duration ?? derived), buddy: editing.buddy || '',
+        startBar: s(editing.startBar), endBar: s(editing.endBar), maxDepth: s(editing.maxDepth), avgDepth: s(editing.avgDepth),
+        weights: s(editing.weights), waterTemp: s(editing.waterTemp), visibility: s(editing.visibility),
+        light: editing.light || '', current: editing.current || '', suit: editing.suit || '', notes: editing.notes || '',
+      });
+      setDurManual(editing.duration != null && editing.duration !== derived);
+      setLoc({ siteName: editing.siteName || '', siteRef: editing.siteRef || null, lat: editing.lat ?? null, lon: editing.lon ?? null });
+      setSeen(editing.sightings);
+      setHighlight(editing.highlight ?? null);
+    } else if (dives.length) {
+      // divers usually repeat buddy, weights and suit
+      const last = dives[dives.length - 1];
+      setForm((f) => ({ ...f, buddy: last.buddy || '', weights: last.weights != null ? String(last.weights) : '', suit: last.suit || '' }));
+    }
+  }, [editing, dives]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // New dive: carry over the last buddy/weights/suit — divers usually repeat them
+  // Autosave every change (debounced) so nothing is lost if the screen is left by accident.
   useEffect(() => {
-    if (editId != null || hydrated.current || !dives.length) return;
-    hydrated.current = true;
-    const last = dives[dives.length - 1];
-    setForm((f) => ({ ...f, buddy: last.buddy || '', weights: last.weights != null ? String(last.weights) : '', suit: last.suit || '' }));
-  }, [dives, editId]);
+    if (!hydrated.current || !dirty.current) return;
+    const t = setTimeout(() => {
+      try { localStorage.setItem(akey, JSON.stringify({ form, loc, seen: seen.map(({ species, ...s }) => ({ ...s, species })), highlight, durManual, at: Date.now() } satisfies Autosave)); } catch { /* storage full / private mode */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [form, loc, seen, highlight, durManual, akey]);
+  const touch = () => { dirty.current = true; };
 
   // ?species=123 from a species page
   useEffect(() => {
     const sid = Number(params.get('species'));
     if (!sid) return;
     api.get<{ cards: SpeciesCard[] }>(`/api/species/cards?ids=${sid}`).then(({ cards }) => {
-      if (cards[0]) setSeen((s) => (s.some((x) => x.aphiaId === sid) ? s : [...s, { aphiaId: sid, count: 1, species: cards[0] }]));
+      if (cards[0]) setSeen((s) => (s.some((x) => x.aphiaId === sid) ? s : [...s, { aphiaId: sid, count: 1, special: !!cards[0].suggestSpecial, species: cards[0] }]));
     }).catch(() => {});
   }, [params]);
 
@@ -94,10 +125,44 @@ export default function LogDive() {
   const cardOf = (aphiaId: number) => seenCards.find((c) => c.aphiaId === aphiaId) || seen.find((s) => s.aphiaId === aphiaId)?.species || null;
   const selectedIds = useMemo(() => new Set(seen.map((s) => s.aphiaId)), [seen]);
 
-  const set = <K extends keyof Form>(k: K, v: Form[K]) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: undefined })); };
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => {
+    touch();
+    setForm((f) => {
+      const next = { ...f, [k]: v };
+      // duration follows start/end time unless the diver typed their own
+      if ((k === 'startTime' || k === 'endTime') && !durManual) {
+        const m = minutesBetween(next.startTime, next.endTime);
+        if (m != null) next.duration = String(m);
+      }
+      return next;
+    });
+    setErrors((e) => ({ ...e, [k]: undefined }));
+  };
+  const setDuration = (v: string) => {
+    touch();
+    setDurManual(v.trim() !== '');
+    setForm((f) => {
+      const next = { ...f, duration: v };
+      // start + duration → fill in a missing end time
+      const n = Number(v);
+      if (f.startTime && !f.endTime && Number.isFinite(n) && n > 0 && n < 600) {
+        const [h, m] = f.startTime.split(':').map(Number);
+        const t = (h * 60 + m + n) % 1440;
+        next.endTime = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+      }
+      return next;
+    });
+    setErrors((e) => ({ ...e, duration: undefined }));
+  };
 
-  const toggleSpecies = (c: SpeciesCard) => setSeen((s) => (s.some((x) => x.aphiaId === c.aphiaId) ? s.filter((x) => x.aphiaId !== c.aphiaId) : [...s, { aphiaId: c.aphiaId, count: 1, species: c }]));
-  const bump = (aphiaId: number, d: number) => setSeen((s) => s.map((x) => (x.aphiaId === aphiaId ? { ...x, count: Math.max(1, x.count + d) } : x)));
+  const toggleSpecies = (c: SpeciesCard) => {
+    touch();
+    setSeen((s) => (s.some((x) => x.aphiaId === c.aphiaId) ? s.filter((x) => x.aphiaId !== c.aphiaId) : [...s, { aphiaId: c.aphiaId, count: 1, special: !!c.suggestSpecial, species: c }]));
+    setHighlight((h) => (h === c.aphiaId ? null : h));
+  };
+  const removeSpecies = (aphiaId: number) => { touch(); setSeen((x) => x.filter((y) => y.aphiaId !== aphiaId)); setHighlight((h) => (h === aphiaId ? null : h)); };
+  const bump = (aphiaId: number, d: number) => { touch(); setSeen((s) => s.map((x) => (x.aphiaId === aphiaId ? { ...x, count: Math.max(1, x.count + d) } : x))); };
+  const toggleSpecial = (aphiaId: number) => { touch(); setSeen((s) => s.map((x) => (x.aphiaId === aphiaId ? { ...x, special: !x.special } : x))); };
 
   async function addFiles(files: FileList | null) {
     if (!files) return;
@@ -113,10 +178,12 @@ export default function LogDive() {
     if (fileRef.current) fileRef.current.value = '';
   }
 
-  function validate(): DiveFields | null {
+  /** Builds the record. A draft skips the "required" checks; numbers out of range are always flagged. */
+  function validate(draft: boolean): DiveFields | null {
     const e: typeof errors = {};
-    if (!loc.siteName.trim()) e.site = 'Choose where you dived';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date)) e.date = 'Pick a date';
+    if (!draft && !loc.siteName.trim()) e.site = 'Choose where you dived';
+    if (form.date && !/^\d{4}-\d{2}-\d{2}$/.test(form.date)) e.date = 'Pick a date';
+    else if (!draft && !form.date) e.date = 'Pick a date';
     else if (form.date > todayISO()) e.date = "Date can't be in the future";
     const num = (k: keyof Form): number | null => {
       const raw = String(form[k]).trim().replace(',', '.');
@@ -128,10 +195,11 @@ export default function LogDive() {
     };
     const f: DiveFields = {
       siteName: loc.siteName.trim(), siteRef: loc.siteRef, lat: loc.lat, lon: loc.lon, date: form.date,
-      startTime: form.startTime || null, endTime: form.endTime || null, buddy: form.buddy.trim() || null,
+      startTime: form.startTime || null, endTime: form.endTime || null, duration: num('duration'), buddy: form.buddy.trim() || null,
       startBar: num('startBar'), endBar: num('endBar'), maxDepth: num('maxDepth'), avgDepth: num('avgDepth'),
       weights: num('weights'), waterTemp: num('waterTemp'), visibility: num('visibility'),
       light: form.light || null, current: form.current || null, suit: form.suit.trim() || null, notes: form.notes.trim() || null,
+      highlight: highlight != null && seen.some((s) => s.aphiaId === highlight) ? highlight : null,
     };
     if (f.startBar != null && f.endBar != null && f.endBar > f.startBar) e.endBar = 'Higher than start air';
     if (f.avgDepth != null && f.maxDepth != null && f.avgDepth > f.maxDepth) e.avgDepth = 'Deeper than max depth';
@@ -139,24 +207,35 @@ export default function LogDive() {
     return Object.keys(e).length ? null : f;
   }
 
-  async function onSave() {
-    const fields = validate();
-    if (!fields) { setToast('Check the highlighted fields'); return; }
-    setSaving(true);
+  async function onSave(draft: boolean) {
+    const fields = validate(draft);
+    if (!fields) { setToast(draft ? 'Fix the highlighted numbers first' : 'Add the missing details, or save as a draft'); return; }
+    setSaving(draft ? 'draft' : 'save');
     try {
-      const { dive } = await saveDive({ id: editId ?? undefined, fields, sightings: seen, newPhotos: photos });
+      const { dive } = await saveDive({ id: editId ?? undefined, fields, sightings: seen, newPhotos: photos, draft });
       setPhotos([]);
-      nav(`/log/${dive.id}`, { replace: true });
+      try { localStorage.removeItem(akey); } catch { /* ignore */ }
+      if (draft) { setToast('Draft saved — finish it any time from your Dive Log'); nav('/log', { replace: true }); }
+      else nav(`/log/${dive.id}`, { replace: true });
     } catch (e) {
       setToast((e as Error).message);
     } finally {
-      setSaving(false);
+      setSaving(null);
     }
   }
+
+  const discardRestored = () => {
+    try { localStorage.removeItem(akey); } catch { /* ignore */ }
+    hydrated.current = false; dirty.current = false; setRestored(null);
+    setForm(EMPTY); setSeen([]); setHighlight(null); setLoc({ siteName: '', siteRef: null, lat: null, lon: null });
+  };
 
   if (editId != null && !editing) {
     return <main className="page"><div className="empty glass"><h3>Dive not found</h3><Link className="btn" to="/log">Back to your log</Link></div></main>;
   }
+
+  const depthNum = Number(form.maxDepth.replace(',', '.'));
+  const derived = minutesBetween(form.startTime, form.endTime);
 
   return (
     <main className="page">
@@ -164,10 +243,18 @@ export default function LogDive() {
       <div className="page-head">
         <button className="back-btn" onClick={() => nav(-1)} aria-label="Back"><Icon name="left" size={28} /></button>
         <div>
-          <h1 className="page-title">{editing ? 'Edit Dive' : 'Log Dive'}</h1>
-          <p className="page-sub">{editing ? `Dive #${editing.number} · ${editing.siteName}` : 'Add a new dive to your log'}</p>
+          <h1 className="page-title">{editing && !isDraft ? 'Edit Dive' : 'Log Dive'}</h1>
+          <p className="page-sub">{editing && !isDraft ? `Dive #${editing.number} · ${editing.siteName}` : isDraft ? 'Finishing a draft' : 'Add a new dive to your log'}</p>
         </div>
       </div>
+
+      {restored && (
+        <div className="banner info" role="status">
+          <Icon name="sync" size={18} />
+          <span style={{ flex: 1 }}>Restored what you were typing ({new Date(restored).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}). Photos need re-adding.</span>
+          <button className="link-caps" onClick={discardRestored}>Discard</button>
+        </div>
+      )}
 
       <div className="stack">
         <Field icon="users" label="Dive partner">
@@ -178,7 +265,7 @@ export default function LogDive() {
 
         <div className="grid2" style={{ gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr)' }}>
           <Field icon="calendar" label="Date" error={errors.date}>
-            <input type="date" value={form.date} max={todayISO()} onChange={(e) => set('date', e.target.value)} onClick={(e) => { try { e.currentTarget.showPicker(); } catch { /* unsupported */ } }} required />
+            <input type="date" value={form.date} max={todayISO()} onChange={(e) => set('date', e.target.value)} onClick={(e) => { try { e.currentTarget.showPicker(); } catch { /* unsupported */ } }} />
           </Field>
           <Field icon={form.light === 'night' ? 'moon' : form.light === 'dusk' ? 'dusk' : 'sun'} label="Light">
             <select value={form.light} onChange={(e) => set('light', e.target.value as Light | '')} style={{ fontSize: 20 }}>
@@ -194,9 +281,34 @@ export default function LogDive() {
           <Field icon="clock" label="Start time"><input type="time" value={form.startTime} onChange={(e) => set('startTime', e.target.value)} /></Field>
           <Field icon="clock" label="End time"><input type="time" value={form.endTime} onChange={(e) => set('endTime', e.target.value)} /></Field>
 
-          <NumField icon="waves" label="Max depth" k="maxDepth" form={form} set={set} error={errors.maxDepth} />
+          <Field icon="hourglass" label={durManual || derived == null ? 'Duration' : 'Duration · auto'} error={errors.duration}>
+            <input type="number" inputMode="numeric" min={1} max={600} step={1} value={form.duration} onChange={(e) => setDuration(e.target.value)} placeholder="–" aria-describedby="dur-hint" />
+            <span className="unit">min</span>
+          </Field>
           <NumField icon="weight" label="Weight" k="weights" form={form} set={set} error={errors.weights} />
+        </div>
+        {durManual && derived != null && Number(form.duration) !== derived && (
+          <p id="dur-hint" className="credits" style={{ margin: '-4px 4px 0' }}>
+            Times give {derived} min. <button className="link-caps" onClick={() => { setDurManual(false); set('duration', String(derived)); }}>Use {derived} min</button>
+          </p>
+        )}
 
+        <div className={`glass field depth-field${errors.maxDepth ? ' invalid' : ''}`}>
+          <span className="ico"><Icon name="waves" size={24} /></span>
+          <span className="body">
+            <label className="caps" htmlFor="maxDepth">Max depth</label>
+            <span className="val">
+              <input id="maxDepth" type="number" inputMode="decimal" min={0} max={350} step="any" value={form.maxDepth} onChange={(e) => set('maxDepth', e.target.value)} placeholder="–" />
+              <span className="unit">m</span>
+            </span>
+            <input className="depth-range" type="range" min={0} max={DEPTH_SLIDER_MAX} step={0.5} aria-label="Max depth slider"
+              value={Number.isFinite(depthNum) ? Math.min(depthNum, DEPTH_SLIDER_MAX) : 0}
+              onChange={(e) => set('maxDepth', String(Number(e.target.value)))} />
+            {errors.maxDepth && <span className="field-err">{errors.maxDepth}</span>}
+          </span>
+        </div>
+
+        <div className="grid2">
           <NumField icon="thermo" label="Water temp" k="waterTemp" form={form} set={set} error={errors.waterTemp} />
           <NumField icon="eye" label="Visibility" k="visibility" form={form} set={set} error={errors.visibility} />
 
@@ -219,38 +331,50 @@ export default function LogDive() {
           </div>
           {seen.length === 0 ? (
             <button className="muted" style={{ padding: '10px 6px 6px', fontSize: 14.5, textAlign: 'left' }} onClick={() => setPicker(true)}>
-              Search by common, scientific or Hebrew name — try “Nemo”.
+              Optional. Search by common, scientific or Hebrew name — try “Nemo”.
             </button>
           ) : (
-            <div className="seen-row">
-              {seen.map((s) => {
-                const c = cardOf(s.aphiaId);
-                return (
-                  <div key={s.aphiaId} className="seen-item">
-                    <Img src={c?.image?.url} srcSet={srcSetFor(c?.image)} sizes="132px" alt={displayName(c, nameLang)} />
-                    <div className="cnt" aria-label={`${s.count} seen`}>
-                      <button onClick={() => bump(s.aphiaId, -1)} aria-label="One fewer"><Icon name="minus" size={13} /></button>
-                      <span style={{ minWidth: 14, textAlign: 'center' }}>{s.count}</span>
-                      <button onClick={() => bump(s.aphiaId, 1)} aria-label="One more"><Icon name="plus" size={13} /></button>
+            <>
+              <div className="seen-row">
+                {seen.map((s) => {
+                  const c = cardOf(s.aphiaId);
+                  const nm = displayName(c, nameLang);
+                  const hl = highlight === s.aphiaId;
+                  return (
+                    <div key={s.aphiaId} className={`seen-item${hl ? ' is-highlight' : ''}`}>
+                      {c && <SpeciesPhoto className="fill" species={c} sizes="132px" maxWidth={500} alt={nm} />}
+                      <div className="cnt" aria-label={`${s.count} seen`}>
+                        <button onClick={() => bump(s.aphiaId, -1)} aria-label="One fewer"><Icon name="minus" size={13} /></button>
+                        <span style={{ minWidth: 14, textAlign: 'center' }}>{s.count}</span>
+                        <button onClick={() => bump(s.aphiaId, 1)} aria-label="One more"><Icon name="plus" size={13} /></button>
+                      </div>
+                      <button className="x" onClick={() => removeSpecies(s.aphiaId)} aria-label={`Remove ${nm}`}><Icon name="close" size={14} /></button>
+                      <div className="seen-actions">
+                        <button className={s.special ? 'on special' : ''} onClick={() => toggleSpecial(s.aphiaId)} aria-pressed={!!s.special} title="Special encounter (your own judgement)"><Icon name="star" size={14} />Special</button>
+                        <button className={hl ? 'on' : ''} onClick={() => { touch(); setHighlight(hl ? null : s.aphiaId); }} aria-pressed={hl} title="Feature on this dive's journal page"><Icon name="book" size={14} />Highlight</button>
+                      </div>
+                      <div className="nm" dir="auto">{nm}</div>
                     </div>
-                    <button className="x" onClick={() => setSeen((x) => x.filter((y) => y.aphiaId !== s.aphiaId))} aria-label={`Remove ${displayName(c, nameLang)}`}><Icon name="close" size={14} /></button>
-                    <div className="nm" dir="auto">{displayName(c, nameLang)}</div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+              <p className="credits" style={{ margin: '6px 4px 0' }}>
+                <b>Special</b> marks encounters that felt special to you (sharks, mantas, turtles and similar start starred — change it freely).
+                <b> Highlight</b> picks the species shown on this dive's journal page.
+              </p>
+            </>
           )}
         </section>
 
         <section className="glass" style={{ padding: 12 }}>
           <div className="row" style={{ marginBottom: 10 }}>
-            <span className="field-ico-sm"><Icon name="camera" size={20} style={{ color: 'var(--accent)' }} /></span>
+            <Icon name="camera" size={20} style={{ color: 'var(--accent)' }} />
             <span className="caps">Your photos</span>
             <span className="spacer" />
             <button className="btn" onClick={() => fileRef.current?.click()}><Icon name="plus" size={18} />Add</button>
             <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => addFiles(e.target.files)} />
           </div>
-          {(editing?.photos.length || 0) + photos.length === 0 && <p className="muted" style={{ margin: 0, fontSize: 14 }}>Attach your own underwater shots. Tag one with a species to feature it in your journal.</p>}
+          {(editing?.photos.length || 0) + photos.length === 0 && <p className="muted" style={{ margin: 0, fontSize: 14 }}>Optional. Your first photo goes on the journal page; tag one with the highlighted species to use it there.</p>}
           <div className="photo-strip">
             {editing?.photos.map((p) => (
               <div key={p.id} className="ph">
@@ -272,7 +396,6 @@ export default function LogDive() {
               </div>
             ))}
           </div>
-          
         </section>
 
         <section className="glass" style={{ padding: 12 }}>
@@ -289,24 +412,37 @@ export default function LogDive() {
             <span className="caps">Location</span>
           </div>
           <button className="loc-tile" onClick={() => setLocOpen(true)}>
-            <div className="loc-thumb">{loc.lat != null ? <SatImage lat={loc.lat} lon={loc.lon!} zoom={13} alt="Satellite view of the dive site" /> : <div className="sp-noimg" style={{ position: 'static', height: '100%' }}><Icon name="globe" size={26} /></div>}</div>
-            <span style={{ flex: 1, fontSize: 18, fontWeight: 500 }}>{loc.siteName || <span className="muted">Choose dive site</span>}</span>
+            <div className="loc-thumb">{loc.lat != null ? <SatImage lat={loc.lat} lon={loc.lon!} zoom={11} alt="Satellite view of the dive site" /> : <div className="sp-noimg" style={{ position: 'static', height: '100%' }}><Icon name="globe" size={26} /></div>}</div>
+            <span style={{ flex: 1, fontSize: 18, fontWeight: 500 }} dir="auto">{loc.siteName || <span className="muted">Choose dive site</span>}
+              {loc.siteName && loc.lat == null && <span className="muted" style={{ display: 'block', fontSize: 13, fontWeight: 400 }}>No pin — won’t appear on your map</span>}
+            </span>
             <Icon name="right" />
           </button>
           {errors.site && <div className="field-err">{errors.site}</div>}
         </section>
 
-        <button className="btn btn-primary btn-big" onClick={onSave} disabled={saving}>
-          {saving ? <span className="spinner" style={{ borderTopColor: 'var(--accent-ink)' }} /> : <Icon name="log" size={24} />} {editing ? 'Save Changes' : 'Save Dive'}
+        <button className="btn btn-primary btn-big" onClick={() => onSave(false)} disabled={!!saving}>
+          {saving === 'save' ? <span className="spinner" style={{ borderTopColor: 'var(--accent-ink)' }} /> : <Icon name="log" size={24} />} {editing && !isDraft ? 'Save Changes' : 'Save Dive'}
         </button>
+        {(!editing || isDraft) && (
+          <button className="btn btn-big" onClick={() => onSave(true)} disabled={!!saving} style={{ height: 50 }}>
+            {saving === 'draft' ? <span className="spinner" /> : <Icon name="edit" size={18} />} Save as draft
+          </button>
+        )}
+        <p className="credits" style={{ textAlign: 'center', margin: 0 }}>Only the site and date are needed to save. Everything else is optional{form.startTime && form.endTime ? ` · ${fmtTime(form.startTime)}–${fmtTime(form.endTime)}` : ''}.</p>
       </div>
 
       <Sheet open={picker} onClose={() => setPicker(false)} title="Add species" actions={seen.length ? <span className="muted" style={{ fontSize: 14 }}>{seen.length} selected</span> : null}>
         <SpeciesSearch autoFocus selected={selectedIds} onToggle={toggleSpecies} />
-        {seen.length > 0 && <button className="btn btn-primary btn-big" style={{ marginTop: 14, position: 'sticky', bottom: 0 }} onClick={() => setPicker(false)}>Done</button>}
+        {seen.length > 0 && (
+          <div className="picker-confirm">
+            <span dir="auto">{seen.slice(0, 3).map((s) => displayName(cardOf(s.aphiaId), nameLang)).join(', ')}{seen.length > 3 ? ` +${seen.length - 3}` : ''}</span>
+            <button className="btn btn-primary" onClick={() => setPicker(false)}><Icon name="check" size={18} />Add {seen.length} to dive</button>
+          </div>
+        )}
       </Sheet>
 
-      <LocationPicker open={locOpen} onClose={() => setLocOpen(false)} value={loc} onPick={(v) => { setLoc(v); setErrors((e) => ({ ...e, site: undefined })); }} />
+      <LocationPicker open={locOpen} onClose={() => setLocOpen(false)} value={loc} onPick={(v) => { touch(); setLoc(v); setErrors((e) => ({ ...e, site: undefined })); }} />
     </main>
   );
 }
@@ -324,11 +460,11 @@ function Field({ icon, label, children, error }: { icon: IconName; label: string
   );
 }
 
-function NumField({ icon, label, k, form, set, error, placeholder }: { icon: IconName; label: string; k: keyof Form; form: Form; set: (k: keyof Form, v: string) => void; error?: string; placeholder?: string }) {
+function NumField({ icon, label, k, form, set, error }: { icon: IconName; label: string; k: keyof Form; form: Form; set: (k: keyof Form, v: string) => void; error?: string }) {
   const [lo, hi, unit] = LIMITS[k]!;
   return (
     <Field icon={icon} label={label} error={error}>
-      <input type="number" inputMode="decimal" min={lo} max={hi} step="any" value={form[k] as string} onChange={(e) => set(k, e.target.value)} placeholder={placeholder ?? "–"} />
+      <input type="number" inputMode="decimal" min={lo} max={hi} step="any" value={form[k] as string} onChange={(e) => set(k, e.target.value)} placeholder="–" />
       <span className="unit">{unit}</span>
     </Field>
   );

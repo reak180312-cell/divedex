@@ -90,6 +90,24 @@ export async function commonsImages(scientificName, p18, limit = 10, failed) {
   return [...out.filter((i) => !i.illustration), ...out.filter((i) => i.illustration)].slice(0, limit);
 }
 
+const IINFO = 'prop=imageinfo&iiprop=url|extmetadata|mime|size&iiurlwidth=330&iiextmetadatafilter=License|LicenseShortName|UsageTerms|Artist|Credit|NonFree|ImageDescription';
+
+/**
+ * Fast path for collection/search thumbnails: one Commons request (category members + per-file license
+ * metadata in a single generator query), plus a search fallback only when the category is thin.
+ */
+export async function commonsPhotoSet(scientificName, limit = 6) {
+  const cat = await getJSON(`${COMMONS}?action=query&format=json&origin=*&generator=categorymembers&gcmtitle=${enc(`Category:${scientificName}`)}&gcmtype=file&gcmlimit=30&${IINFO}`, { ttl: 14 * DAY, timeout: 10000 });
+  let pages = Object.values(cat?.query?.pages || {});
+  if (pages.filter((p) => commonsToImage(p)).length < 2) {
+    const s = await getJSON(`${COMMONS}?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=15&gsrsearch=${enc(`"${scientificName}" filetype:bitmap`)}&${IINFO}`, { ttl: 14 * DAY, timeout: 10000 });
+    pages = [...pages, ...Object.values(s?.query?.pages || {})];
+  }
+  const seen = new Set();
+  const out = pages.map(commonsToImage).filter((i) => i && !seen.has(i.id) && seen.add(i.id));
+  return [...out.filter((i) => !i.illustration), ...out.filter((i) => i.illustration)].slice(0, limit);
+}
+
 export async function gbifMatch(scientificName) {
   const m = await getJSON(`https://api.gbif.org/v1/species/match?name=${enc(scientificName)}&strict=true`, { ttl: 30 * DAY });
   if (!m?.usageKey || m.matchType === 'NONE' || m.matchType === 'HIGHERRANK') return null;
@@ -103,14 +121,20 @@ export async function gbifCount(key) {
 
 const inatSize = (u, size) => u.replace(/\/(original|large|medium|small|square)\.(jpe?g|png)/i, `/${size}.$2`);
 
-export async function gbifImages(key, limit = 10) {
-  const r = await getJSON(`https://api.gbif.org/v1/occurrence/search?taxonKey=${key}&mediaType=StillImage&license=CC0_1_0&limit=60`, { ttl: 14 * DAY, timeout: 15000 });
+/**
+ * CC0 photos from GBIF occurrences. Searching by scientific name lets GBIF resolve its own taxonomy, so no
+ * separate species-match request is needed (GBIF throttles phones that fire many requests in a burst).
+ */
+export async function gbifImages(scientificName, limit = 10) {
+  const r = await getJSON(`https://api.gbif.org/v1/occurrence/search?scientificName=${enc(scientificName)}&mediaType=StillImage&license=CC0_1_0&limit=${limit <= 6 ? 8 : 24}`, { ttl: 14 * DAY, timeout: 15000 });
   const out = [];
   const seen = new Set();
   for (const occ of r?.results || []) {
     for (const m of occ.media || []) {
       if (m.type && m.type !== 'StillImage') continue;
       if (!m.identifier || seen.has(m.identifier)) continue;
+      // http:// images are blocked on an https page (mixed content) — they would never load.
+      if (!/^https:\/\//i.test(m.identifier)) continue;
       const license = gbifLicense(m.license); // per-image license — required
       if (!license) continue;
       if (m.format && !IMG_MIME.test(m.format)) continue;

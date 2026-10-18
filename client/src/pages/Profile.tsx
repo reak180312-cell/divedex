@@ -29,15 +29,19 @@ export default function Profile() {
     try {
       const blob = await exportBackup();
       const file = new File([blob], `divedex-backup-${new Date().toISOString().slice(0, 10)}.json`, { type: 'application/json' });
-      // On phones, offer the share sheet (save to Files / Drive / send to yourself); else download.
-      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'DiveDex backup' }).catch(() => {});
-      else {
+      const download = () => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(file);
         a.download = file.name;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-      }
+        setToast(`Saved ${file.name}`);
+      };
+      // Phones: the share sheet (save to Files / Drive, or send it to yourself). Computers: a normal download.
+      const phone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (phone && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'DiveDex backup' }).catch((e: Error) => { if (e.name !== 'AbortError') download(); });
+      } else download();
     } catch (e) { setToast((e as Error).message); } finally { setBusy(false); }
   };
 
@@ -88,7 +92,8 @@ export default function Profile() {
 
         <section className="glass section">
           <div className="caps" style={{ marginBottom: 8 }}>Your data</div>
-          <p className="muted" style={{ margin: '0 0 10px', fontSize: 14.5 }}>{dives.length} dives · {collection.length} species — stored only on this device.</p>
+          <p className="muted" style={{ margin: '0 0 6px', fontSize: 14.5 }}>{dives.length} dives · {collection.length} species — stored only in this browser on this device.</p>
+          <p className="banner info" style={{ margin: '0 0 10px' }}><Icon name="info" size={18} />Your logbook does not sync between devices. To move it to another phone or computer, export a backup here and import it there.</p>
           <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
             <button className="btn" onClick={exportData} disabled={busy}><Icon name="external" size={18} />Export backup</button>
             <button className="btn" onClick={() => fileRef.current?.click()} disabled={busy}><Icon name="plus" size={18} />Import backup</button>

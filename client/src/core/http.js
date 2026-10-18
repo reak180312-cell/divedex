@@ -6,14 +6,20 @@ export class UpstreamError extends Error {
 }
 
 // Max concurrent requests per host (Wikimedia & Nominatim are strict).
-const LIMITS = { 'www.wikidata.org': 2, 'commons.wikimedia.org': 2, 'he.wikipedia.org': 2, 'en.wikipedia.org': 2, 'nominatim.openstreetmap.org': 1 };
+// Measured: GBIF's edge cache answers 429 (Retry-After: 3) to bursts from one address, so GBIF gets
+// 2 parallel requests spaced ≥400 ms apart; Nominatim's policy is 1 request per second.
+const LIMITS = { 'www.wikidata.org': 2, 'commons.wikimedia.org': 3, 'he.wikipedia.org': 2, 'en.wikipedia.org': 2, 'nominatim.openstreetmap.org': 1, 'api.gbif.org': 2, 'www.marinespecies.org': 4 };
+const MIN_INTERVAL = { 'api.gbif.org': 400, 'nominatim.openstreetmap.org': 1100 };
 const hosts = new Map();
-const slot = (host) => hosts.get(host) || hosts.set(host, { active: 0, queue: [], pauseUntil: 0 }).get(host);
+const slot = (host) => hosts.get(host) || hosts.set(host, { active: 0, queue: [], pauseUntil: 0, nextStart: 0 }).get(host);
 async function acquire(host) {
   const h = slot(host);
   if (h.active >= (LIMITS[host] ?? 6)) await new Promise((r) => h.queue.push(r));
   h.active++;
-  const wait = h.pauseUntil - Date.now();
+  // honour back-off from a 429 and the per-host spacing
+  const start = Math.max(Date.now(), h.pauseUntil, h.nextStart);
+  h.nextStart = start + (MIN_INTERVAL[host] ?? 0);
+  const wait = start - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 function release(host) { const h = slot(host); h.active--; h.queue.shift()?.(); }
@@ -30,9 +36,9 @@ async function doFetch(url, { timeout, init }) {
     } finally {
       release(host);
     }
-    if ((res.status === 429 || res.status === 503) && attempt < 2) {
+    if ((res.status === 429 || res.status === 503) && attempt < 3) {
       const ra = Number(res.headers.get('retry-after'));
-      slot(host).pauseUntil = Date.now() + Math.min(8000, Number.isFinite(ra) && ra > 0 ? ra * 1000 : 1200 * (attempt + 1));
+      slot(host).pauseUntil = Date.now() + Math.min(10000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 1500) * (attempt + 1));
       continue;
     }
     return res;

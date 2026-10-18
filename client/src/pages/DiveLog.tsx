@@ -5,7 +5,7 @@ import { useStore } from '../store';
 import { durationMin, fmtDate } from '../util';
 
 export default function DiveLog() {
-  const { dives, collection, loaded } = useStore();
+  const { dives, drafts, collection, loaded } = useStore();
   const [q, setQ] = useState('');
 
   const stats = useMemo(() => {
@@ -44,6 +44,24 @@ export default function DiveLog() {
         </div>
       )}
 
+      {drafts.length > 0 && (
+        <section style={{ marginBottom: 16 }}>
+          <div className="caps" style={{ marginBottom: 8 }}>Drafts — not in your journal yet</div>
+          <div className="stack">
+            {drafts.map((d) => (
+              <Link key={d.id} to={`/log/${d.id}/edit`} className="dive-row glass draft-row">
+                <span className="dive-num"><Icon name="edit" size={20} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.siteName || 'Untitled dive'}</div>
+                  <div className="muted" style={{ fontSize: 13 }}>{d.date ? fmtDate(d.date) : 'No date yet'} · {d.sightings.length} species · tap to finish</div>
+                </div>
+                <Icon name="right" />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
       {loaded && dives.length === 0 && (
         <div className="empty glass">
           <Icon name="book" size={44} />
@@ -57,7 +75,7 @@ export default function DiveLog() {
         {list.map((d) => {
           const dur = durationMin(d);
           return (
-            <Link key={`${d.id}-${d.clientId}`} to={d.pending ? '/' : `/log/${d.id}`} className="dive-row glass">
+            <Link key={`${d.id}-${d.clientId}`} to={`/log/${d.id}`} className="dive-row glass">
               <span className="dive-num">{d.number}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 17, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.siteName}</div>
@@ -68,7 +86,6 @@ export default function DiveLog() {
                   {d.maxDepth != null && <span className="row" style={{ gap: 4 }}><Icon name="waves" size={15} />{d.maxDepth} m</span>}
                   {dur != null && <span className="row" style={{ gap: 4 }}><Icon name="clock" size={15} />{dur} min</span>}
                   {d.sightings.length > 0 && <span className="row" style={{ gap: 4 }}><Icon name="fish" size={15} />{d.sightings.length}</span>}
-                  {d.pending && <span className="row" style={{ gap: 4, color: 'var(--warn)' }}><Icon name="sync" size={15} />Waiting to sync</span>}
                 </div>
               </div>
               <Icon name="right" />

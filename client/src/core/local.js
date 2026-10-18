@@ -3,16 +3,17 @@
 import { dbp, persistStorage } from './db.js';
 import { getJSON } from './http.js';
 import { search } from './search.js';
-import { getCards, getProfile, rowToCard, speciesRow, ensureRecord, getCard, RARITY } from './species.js';
+import { getCards, getProfile, getPhotos, rowToCard, speciesRow, ensureRecord, getCard, RARITY } from './species.js';
 import { SIZE_CLASSES, GROUPS } from './worms.js';
+import { localFrequency } from './rarity.js';
 
 export class LocalError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
 
 const FIELDS = ['siteName', 'siteRef', 'lat', 'lon', 'date', 'startTime', 'endTime', 'maxDepth', 'avgDepth', 'startBar', 'endBar', 'weights',
-  'waterTemp', 'visibility', 'buddy', 'notes', 'area', 'light', 'current', 'suit'];
-const RANGES = { lat: [-90, 90], lon: [-180, 180], maxDepth: [0, 350], avgDepth: [0, 350], startBar: [0, 350], endBar: [0, 350], weights: [0, 40], waterTemp: [-3, 40], visibility: [0, 100] };
+  'waterTemp', 'visibility', 'buddy', 'notes', 'area', 'light', 'current', 'suit', 'duration'];
+const RANGES = { lat: [-90, 90], lon: [-180, 180], maxDepth: [0, 350], avgDepth: [0, 350], startBar: [0, 350], endBar: [0, 350], weights: [0, 40], waterTemp: [-3, 40], visibility: [0, 100], duration: [0, 600] };
 const ENUMS = { light: ['day', 'night', 'dusk'], current: ['none', 'mild', 'moderate', 'strong'] };
 
 function clean(body) {
@@ -52,15 +53,21 @@ const byDate = (a, b) => `${a.date} ${a.startTime || ''} ${String(a.id).padStart
 async function hydrateDive(d, n) {
   const db = await dbp;
   const sightings = [];
-  for (const s of d.sightings || []) sightings.push({ aphiaId: s.aphiaId, count: s.count, species: rowToCard(await speciesRow(s.aphiaId)) });
+  for (const s of d.sightings || []) sightings.push({ aphiaId: s.aphiaId, count: s.count, special: !!s.special, species: rowToCard(await speciesRow(s.aphiaId)) });
   const photos = (await db.getAllFromIndex('photos', 'dive', d.id)).sort((a, b) => a.id - b.id).map(photoOut);
-  const out = { id: d.id, clientId: d.clientId ?? null, number: n, createdAt: d.createdAt, updatedAt: d.updatedAt, sightings, photos };
+  const out = { id: d.id, clientId: d.clientId ?? null, number: d.draft ? null : n ?? null, draft: !!d.draft, highlight: d.highlight ?? null, createdAt: d.createdAt, updatedAt: d.updatedAt, sightings, photos };
   for (const k of FIELDS) out[k] = d[k] ?? null;
   return out;
 }
 
-async function allDives() {
-  return (await (await dbp).getAll('dives')).sort(byDate);
+/** Saved dives (drafts excluded unless asked for), oldest first. */
+async function allDives({ drafts = false } = {}) {
+  return (await (await dbp).getAll('dives')).filter((d) => drafts || !d.draft).sort(byDate);
+}
+const isComplete = (d) => !!(d.siteName && d.date);
+function highlightOf(want, sightings) {
+  const id = want == null || want === '' ? null : Number(want);
+  return id && sightings.some((s) => s.aphiaId === id) ? id : null;
 }
 
 async function cleanSightings(list) {
@@ -70,7 +77,7 @@ async function cleanSightings(list) {
     if (!id) continue;
     const count = Math.max(1, Math.min(9999, Math.round(Number(s.count) || 1)));
     const ex = out.find((c) => c.aphiaId === id);
-    if (ex) ex.count += count; else out.push({ aphiaId: id, count });
+    if (ex) { ex.count += count; ex.special = ex.special || !!s.special; } else out.push({ aphiaId: id, count, special: !!s.special });
   }
   // Warm species cards (images, rarity) in the background for the journal & collection.
   for (const s of out) getCard(s.aphiaId).catch(() => {});
@@ -143,14 +150,15 @@ export async function handle(method, path, body) {
 
   // dives
   if (p === '/api/dives' && method === 'GET') {
-    const all = await allDives();
-    return { dives: await Promise.all(all.map((d, i) => hydrateDive(d, i + 1))) };
+    const saved = await allDives();
+    const drafts = (await allDives({ drafts: true })).filter((d) => d.draft);
+    return { dives: await Promise.all([...saved.map((d, i) => hydrateDive(d, i + 1)), ...drafts.map((d) => hydrateDive(d, null))]) };
   }
   if ((m = p.match(/^\/api\/dives\/(\d+)$/))) {
     const id = Number(m[1]);
     const prev = await db.get('dives', id);
     if (!prev) throw new LocalError('Dive not found', 404);
-    if (method === 'GET') { const all = await allDives(); return { dive: await hydrateDive(prev, all.findIndex((d) => d.id === id) + 1) }; }
+    if (method === 'GET') { const all = await allDives(); return { dive: await hydrateDive(prev, all.findIndex((d) => d.id === id) + 1 || null) }; }
     if (method === 'DELETE') {
       const photos = await db.getAllKeysFromIndex('photos', 'dive', id);
       const tx = db.transaction(['dives', 'photos'], 'readwrite');
@@ -161,9 +169,11 @@ export async function handle(method, path, body) {
     }
     if (method === 'PUT') {
       const data = clean(body || {});
-      if ('siteName' in data && !data.siteName) throw new LocalError('Dive site is required');
       const next = { ...prev, ...data, updatedAt: new Date().toISOString() };
+      if (body && 'draft' in body) next.draft = !!body.draft;
       if (Array.isArray(body?.sightings)) next.sightings = await cleanSightings(body.sightings);
+      next.highlight = highlightOf(body && 'highlight' in body ? body.highlight : next.highlight, next.sightings || []);
+      if (!next.draft && !isComplete(next)) throw new LocalError(!next.siteName ? 'Dive site is required' : 'Date is required');
       const moved = (data.lat !== undefined && data.lat !== prev.lat) || (data.lon !== undefined && data.lon !== prev.lon);
       if (moved && !('area' in data)) next.area = null;
       await db.put('dives', next);
@@ -178,10 +188,12 @@ export async function handle(method, path, body) {
       if (dup) return { dive: await hydrateDive(dup), duplicate: true };
     }
     const data = clean(b);
-    if (!data.siteName) throw new LocalError('Dive site is required');
-    if (!data.date) throw new LocalError('Date is required');
+    const draft = !!b.draft;
+    if (!draft && !data.siteName) throw new LocalError('Dive site is required');
+    if (!draft && !data.date) throw new LocalError('Date is required');
     const now = new Date().toISOString();
-    const rec = { ...data, clientId: b.clientId || null, sightings: await cleanSightings(b.sightings), createdAt: now, updatedAt: now };
+    const sightings = await cleanSightings(b.sightings);
+    const rec = { ...data, draft, highlight: highlightOf(b.highlight, sightings), clientId: b.clientId || null, sightings, createdAt: now, updatedAt: now };
     const id = await db.add('dives', rec);
     if (!data.area) fillArea(id, data.lat, data.lon);
     persistStorage();
@@ -219,10 +231,13 @@ export async function handle(method, path, body) {
   // collection
   if (p === '/api/collection') {
     const agg = new Map();
+    const blank = (date) => ({ dives: 0, individuals: 0, firstSeen: date, lastSeen: date, depthMin: null, depthMax: null, nightDives: 0, dayDives: 0, areas: new Set(), sites: new Set(), special: false, lastLat: null, lastLon: null, lastArea: null, manual: 0 });
     for (const d of await allDives()) {
       for (const s of d.sightings || []) {
-        const a = agg.get(s.aphiaId) || { dives: 0, individuals: 0, firstSeen: d.date, lastSeen: d.date, depthMin: null, depthMax: null, nightDives: 0, dayDives: 0, areas: new Set(), sites: new Set() };
+        const a = agg.get(s.aphiaId) || blank(d.date);
         a.dives++; a.individuals += s.count;
+        if (s.special) a.special = true;
+        if (d.lat != null && d.lon != null) { a.lastLat = d.lat; a.lastLon = d.lon; a.lastArea = d.area || d.siteName; } // oldest-first, so this ends on the latest
         if (d.date < a.firstSeen) a.firstSeen = d.date;
         if (d.date > a.lastSeen) a.lastSeen = d.date;
         if (d.maxDepth != null) { a.depthMin = a.depthMin == null ? d.maxDepth : Math.min(a.depthMin, d.maxDepth); a.depthMax = a.depthMax == null ? d.maxDepth : Math.max(a.depthMax, d.maxDepth); }
@@ -231,6 +246,15 @@ export async function handle(method, path, body) {
         if (d.siteName) a.sites.add(d.siteName);
         agg.set(s.aphiaId, a);
       }
+    }
+    for (const x of await db.getAll('manual')) {
+      const a = agg.get(x.aphiaId) || blank(x.date);
+      a.manual++; a.individuals += 1;
+      if (x.date < a.firstSeen) a.firstSeen = x.date;
+      if (x.date > a.lastSeen) a.lastSeen = x.date;
+      if (x.special) a.special = true;
+      if (a.lastLat == null && x.lat != null) { a.lastLat = x.lat; a.lastLon = x.lon; a.lastArea = x.place || null; }
+      agg.set(x.aphiaId, a);
     }
     const species = [];
     for (const [id, a] of agg) {
@@ -247,7 +271,37 @@ export async function handle(method, path, body) {
       if (s) sightings.push({ diveId: d.id, siteName: d.siteName, area: d.area ?? null, lat: d.lat ?? null, lon: d.lon ?? null, date: d.date, startTime: d.startTime ?? null, maxDepth: d.maxDepth ?? null, count: s.count });
     }
     const photos = (await db.getAllFromIndex('photos', 'aphia', id)).sort((a, b) => b.id - a.id).map(photoOut);
-    return { sightings, photos };
+    const manual = (await db.getAll('manual')).filter((x) => x.aphiaId === id);
+    const special = manual.some((x) => x.special) || (await allDives()).some((d) => (d.sightings || []).some((x) => x.aphiaId === id && x.special));
+    return { sightings, photos, manual, special };
+  }
+  // add a species to the collection without a dive (e.g. from the species page)
+  if (p === '/api/collection/manual' && method === 'POST') {
+    const id = await ensureRecord(Number(body?.aphiaId)).catch(() => null);
+    if (!id) throw new LocalError('Unknown species');
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(body?.date || '') ? body.date : new Date().toISOString().slice(0, 10);
+    const rec = { aphiaId: id, date, special: !!body?.special, place: body?.place ? String(body.place).slice(0, 120) : null,
+      lat: Number.isFinite(body?.lat) ? body.lat : null, lon: Number.isFinite(body?.lon) ? body.lon : null, createdAt: new Date().toISOString() };
+    const key = await db.add('manual', rec);
+    getCard(id).catch(() => {});
+    return { manual: { ...rec, id: key } };
+  }
+  if ((m = p.match(/^\/api\/collection\/manual\/(\d+)$/)) && method === 'DELETE') { await db.delete('manual', Number(m[1])); return { ok: true }; }
+
+  // the diver's own sites: every saved dive location, grouped (same OSM site, or same name within ~100 m)
+  if (p === '/api/mysites') {
+    const groups = new Map();
+    (await allDives()).forEach((d, i) => {
+      if (d.lat == null || d.lon == null) return;
+      const k = d.siteRef || `${(d.siteName || '').trim().toLowerCase()}|${d.lat.toFixed(3)},${d.lon.toFixed(3)}`;
+      const g = groups.get(k) || { key: k, name: d.siteName, siteRef: d.siteRef ?? null, lat: d.lat, lon: d.lon, area: d.area ?? null, dives: [] };
+      g.dives.push({ id: d.id, number: i + 1, date: d.date, maxDepth: d.maxDepth ?? null });
+      if (d.area) g.area = d.area;
+      groups.set(k, g);
+    });
+    const sites = [...groups.values()].map((g) => ({ ...g, count: g.dives.length, lastDate: g.dives.reduce((mx, x) => (x.date > mx ? x.date : mx), ''), dives: g.dives.sort((a, b) => b.date.localeCompare(a.date)) }));
+    sites.sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+    return { sites };
   }
 
   // species
@@ -259,6 +313,13 @@ export async function handle(method, path, body) {
   if (p === '/api/species/cards') {
     const ids = String(q.get('ids') || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 30);
     return { cards: await getCards(ids) };
+  }
+  if ((m = p.match(/^\/api\/species\/(\d+)\/photos$/))) return getPhotos(Number(m[1]));
+  if ((m = p.match(/^\/api\/species\/(\d+)\/local$/))) {
+    const row = await speciesRow(Number(m[1]));
+    if (!row) throw new LocalError('Unknown species', 404);
+    const lat = Number(q.get('lat')), lon = Number(q.get('lon'));
+    return { local: await localFrequency(row.scientific_name, q.get('lat') && Number.isFinite(lat) ? lat : null, q.get('lon') && Number.isFinite(lon) ? lon : null) };
   }
   if ((m = p.match(/^\/api\/species\/(\d+)$/))) {
     const id = Number(m[1]);
@@ -307,7 +368,8 @@ export async function exportBackup() {
   const photos = await Promise.all((await db.getAll('photos')).map(async ({ blob, ...p }) => ({ ...p, data: await blobToDataUrl(blob) })));
   const ids = new Set(dives.flatMap((d) => (d.sightings || []).map((s) => s.aphiaId)));
   const species = (await db.getAll('species')).filter((s) => ids.has(s.aphia_id));
-  return new Blob([JSON.stringify({ format: 'divedex-backup', version: 1, exportedAt: new Date().toISOString(), profile: await getProfileRow(), dives, photos, species })], { type: 'application/json' });
+  const manual = await db.getAll('manual');
+  return new Blob([JSON.stringify({ format: 'divedex-backup', version: 1, exportedAt: new Date().toISOString(), profile: await getProfileRow(), dives, photos, species, manual })], { type: 'application/json' });
 }
 
 /** Merge a backup into this device. Dives already present (same clientId or same id+site+date) are skipped. */
@@ -335,6 +397,12 @@ export async function importBackup(file) {
     const { id: _old, data: du, ...rest } = ph;
     await db.add('photos', { ...rest, dive_id: ph.dive_id != null ? idMap.get(ph.dive_id) : null, blob: await dataUrlToBlob(du) });
   }
+  const manualKey = (x) => `${x.aphiaId}|${x.date}|${x.createdAt}`;
+  const haveManual = new Set((await db.getAll('manual')).map(manualKey));
+  for (const x of data.manual || []) {
+    const { id: _id, ...rest } = x;
+    if (!haveManual.has(manualKey(x))) await db.add('manual', rest);
+  }
   persistStorage();
   return { added, skipped: (data.dives || []).length - added };
 }
@@ -342,5 +410,5 @@ export async function importBackup(file) {
 /** Delete every DiveDex record on this device. */
 export async function wipeAll() {
   const db = await dbp;
-  for (const s of ['meta', 'dives', 'photos', 'species', 'names', 'cache']) await db.clear(s);
+  for (const s of ['meta', 'dives', 'photos', 'species', 'names', 'cache', 'manual']) await db.clear(s);
 }

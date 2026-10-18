@@ -5,11 +5,13 @@ import { dbp } from './db.js';
 import { settle } from './http.js';
 import { worms, parseTraits, sizeClass, groupOf, GROUPS } from './worms.js';
 import { entityForAphia, namesFromEntity, summary } from './wiki.js';
-import { commonsImages, gbifMatch, gbifCount, gbifImages } from './images.js';
+import { commonsImages, commonsPhotoSet, gbifImages } from './images.js';
 import { norm } from './text.js';
+import { isHighlightTaxon } from './highlights.js';
 
 const DAY_MS = 86400e3;
 const CARD_TTL = 30 * DAY_MS;
+const PHOTO_TTL = 14 * DAY_MS;
 
 export const RARITY = [
   { key: 'common', label: 'Common', min: 100000 },
@@ -60,6 +62,8 @@ export function rowToCard(row) {
     authority: row.authority,
     rank: row.rank,
     family: rec.family ?? null,
+    // taxa many divers treat as a highlight: pre-star them when added to a dive (diver can unstar)
+    suggestSpecial: isHighlightTaxon(rec),
     nameEn: row.name_en ?? null,
     nameHe: row.name_he ?? null,
     group: row.group_key,
@@ -68,9 +72,12 @@ export function rowToCard(row) {
     sizeClass: sizeClass(row.size_cm ?? null),
     gbifCount: row.gbif_count ?? null,
     rarity: row.rarity ?? null,
-    image: row.image ?? null,
+    image: row.photos?.[0] ?? row.image ?? null,
+    images: row.photos ?? (row.image ? [row.image] : []),
+    photosFresh: !!row.photos_at && Date.now() - row.photos_at < PHOTO_TTL,
     wormsUrl: `https://www.marinespecies.org/aphia.php?p=taxdetails&id=${row.aphia_id}`,
-    enriched: !!row.card_at,
+    // "enriched" = has fresh card data; stale or imported rows (card_at: 1) still render but get refreshed
+    enriched: !!row.card_at && Date.now() - row.card_at < CARD_TTL,
   };
 }
 
@@ -108,11 +115,10 @@ async function buildCard(row) {
   const id = row.aphia_id;
   const sci = row.scientific_name;
   const failed = [];
-  const [vern, ent, attrs, gbifKey] = await Promise.all([
+  const [vern, ent, attrs] = await Promise.all([
     settle(worms.vernaculars(id), [], failed),
     settle(entityForAphia(id), null, failed),
     settle(worms.attributes(id), [], failed),
-    settle(gbifMatch(sci), null, failed),
   ]);
   const wd = namesFromEntity(ent, sci);
   const en = englishVernacular(vern);
@@ -128,13 +134,7 @@ async function buildCard(row) {
   await addNames(id, he, 'he');
 
   const { sizeCm } = parseTraits(attrs, id);
-  const count = gbifKey ? await settle(gbifCount(gbifKey), null, failed) : null;
 
-  // Prefer a real photograph: Commons photo, then GBIF field photo, then a Commons illustration.
-  const commons = await settle(commonsImages(sci, wd.p18, 3, failed), [], failed);
-  let image = commons.find((i) => !i.illustration) || null;
-  if (!image && gbifKey) image = (await settle(gbifImages(gbifKey, 1), [], failed))[0] || null;
-  if (!image) image = commons[0] || null;
 
   // If upstreams were unreachable, keep whatever we had before and retry in ~10 minutes.
   const keep = (v, old) => v ?? old ?? null;
@@ -142,12 +142,42 @@ async function buildCard(row) {
   const next = {
     ...fresh,
     name_en: keep(nameEn && titleCaseFirst(nameEn), fresh.name_en), name_he: keep(nameHe, fresh.name_he),
-    size_cm: keep(sizeCm, fresh.size_cm), gbif_key: keep(gbifKey, fresh.gbif_key), gbif_count: keep(count, fresh.gbif_count),
-    rarity: keep(rarityOf(count), fresh.rarity), image: image ?? fresh.image ?? null,
+    size_cm: keep(sizeCm, fresh.size_cm),
     card_at: failed.length ? Date.now() - CARD_TTL + 10 * 60e3 : Date.now(),
   };
   await saveRow(next);
   return rowToCard(next);
+}
+
+const photoInflight = new Map();
+
+/**
+ * Verified photo candidates for a species (best first): Commons photographs, GBIF/iNaturalist CC0 photos,
+ * then Commons illustrations. ~2–3 requests, run in parallel; cached on the device for 14 days.
+ */
+export async function getPhotos(aphiaId, { force = false } = {}) {
+  const id = await ensureRecord(aphiaId);
+  if (!id) return { photos: [], partial: false };
+  const row = await speciesRow(id);
+  if (!force && row.photos && row.photos_at && Date.now() - row.photos_at < PHOTO_TTL) return { photos: row.photos, partial: false };
+  if (photoInflight.has(id)) return photoInflight.get(id);
+  const p = (async () => {
+    const failed = [];
+    const sci = row.scientific_name;
+    // Commons first (one request, fast, not throttled in our measurements); GBIF only when Commons has
+    // fewer than two real photographs — that keeps GBIF traffic low enough to avoid its burst limit.
+    const commons = await settle(commonsPhotoSet(sci, 4), [], failed);
+    const gbif = commons.filter((i) => !i.illustration).length < 2 ? await settle(gbifImages(sci, 4), [], failed) : [];
+    const photos = [...commons.filter((i) => !i.illustration), ...gbif, ...commons.filter((i) => i.illustration)].slice(0, 6);
+    const fresh = await speciesRow(id);
+    const keepOld = !photos.length && failed.length; // offline / rate-limited: don't wipe what we had
+    const next = { ...fresh, photos: keepOld ? (fresh.photos ?? (fresh.image ? [fresh.image] : null)) : photos,
+      photos_at: failed.length ? Date.now() - PHOTO_TTL + 10 * 60e3 : Date.now() };
+    await saveRow(next);
+    return { photos: next.photos || [], partial: failed.length > 0 };
+  })().finally(() => photoInflight.delete(id));
+  photoInflight.set(id, p);
+  return p;
 }
 
 export async function getCards(ids) {
@@ -196,7 +226,7 @@ export async function getProfile(aphiaId, { force = false } = {}) {
 
   const [commons, gbif, sumEn, sumHe] = await Promise.all([
     settle(commonsImages(card.scientificName, wd.p18, 12, failed), [], failed),
-    row.gbif_key ? settle(gbifImages(row.gbif_key, 12), [], failed) : Promise.resolve([]),
+    settle(gbifImages(card.scientificName, 12), [], failed),
     settle(summary('en', wd.enWiki), null, failed),
     settle(summary('he', wd.heWiki), null, failed),
   ]);

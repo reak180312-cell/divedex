@@ -4,9 +4,12 @@ import { Link } from 'react-router-dom';
 import { Icon } from './Icon';
 import { Bubbles, Ink, Seaweed, type InkName } from './JournalArt';
 import { SatImage } from './MapView';
-import { srcSetFor } from '../img';
+import { isBad, markBad, sourcesFor } from '../img';
+import { Sheet } from './ui';
+import { mergeSpecies, requestCard, useSpeciesVersion } from '../hooks';
+import type { SpeciesImage } from '../types';
 import type { Dive } from '../types';
-import { displayName, durationMin, fmtDate, fmtTime, rarestSighting, RARITY_META, type NameLang } from '../util';
+import { displayName, durationMin, fmtDate, fmtTime, highlightSighting, type NameLang } from '../util';
 
 type PageRender = () => ReactNode;
 
@@ -33,6 +36,7 @@ export default function Journal({ dives, nameLang, ownerName, initialIndex, onIn
   // flip: dir 1 = forward (right page turns left), -1 = back. p = progress 0..1
   const [flip, setFlip] = useState<{ dir: 1 | -1; p: number; animating: boolean } | null>(null);
   const [reader, setReader] = useState(false);
+  const [finder, setFinder] = useState(false);
   const bookRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; dir: 1 | -1; width: number; moved: boolean } | null>(null);
   const done = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -122,6 +126,7 @@ export default function Journal({ dives, nameLang, ownerName, initialIndex, onIn
         <span className="caps">{dives.length ? `Dive ${cur?.number ?? index + 1} of ${dives.length}` : 'Your dive journal'}</span>
         <span className="row" style={{ gap: 14 }}>
           {cur && cur.id > 0 && !expanded && <Link to={`/log/${cur.id}`} className="link-caps">Open entry <Icon name="right" size={14} /></Link>}
+          {dives.length > 1 && <button className="link-caps" onClick={() => setFinder(true)} aria-label="Find a dive in the journal"><Icon name="search" size={15} /> Find</button>}
           {!expanded && <button className="link-caps" onClick={() => setReader(true)} aria-label="Open the journal full screen"><Icon name="expand" size={16} /> Expand</button>}
         </span>
       </div>
@@ -162,6 +167,7 @@ export default function Journal({ dives, nameLang, ownerName, initialIndex, onIn
         <button className="book-nav next" onClick={() => go(1)} disabled={index >= last || !!flip} aria-label="Next dive"><Icon name="right" size={18} /></button>
       </div>
 
+      <DiveFinder open={finder} dives={dives} current={index} onClose={() => setFinder(false)} onPick={(i) => { setFlip(null); setIndex(i); setFinder(false); }} />
       {reader && createPortal(
         <div className="reader" role="dialog" aria-modal="true" aria-label="Dive journal">
           <button className="reader-close" onClick={() => setReader(false)} aria-label="Close"><Icon name="close" size={24} /></button>
@@ -208,16 +214,24 @@ function Tape({ style }: { style: CSSProperties }) {
 }
 
 /** A taped print. `corners` = four diagonal tapes, else one strip on top (polaroid). */
-function Print({ src, srcSet, sat, alt, aspect, rotate, corners = true, polaroid, credit, className, style }: {
-  src?: string | null; srcSet?: string; sat?: { lat: number; lon: number; zoom: number } | null; alt: string; aspect: number; rotate: number; corners?: boolean; polaroid?: boolean;
+function Print({ src, srcSet, candidates, sat, alt, aspect, rotate, corners = true, polaroid, credit, className, style }: {
+  src?: string | null; srcSet?: string; candidates?: SpeciesImage[]; sat?: { lat: number; lon: number; zoom: number } | null; alt: string; aspect: number; rotate: number; corners?: boolean; polaroid?: boolean;
   credit?: ReactNode; className?: string; style?: CSSProperties;
 }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
+  const [ci, setCi] = useState(0);
+  useEffect(() => { setFailed(false); setCi(0); }, [src, candidates?.[0]?.url]);
+  // species photos: walk the verified list of the same species when one fails
+  const pool = (candidates || []).filter((c) => !isBad(c.url));
+  const cand = !src && pool.length ? pool[Math.min(ci, pool.length - 1)] : null;
+  const cs = cand ? sourcesFor(cand, 1280) : null;
+  if (cand) { src = cs!.src; srcSet = cs!.srcSet; }
+  if (cand && credit === undefined) credit = `${cand.author ? `${cand.author.slice(0, 40)} · ` : ''}${cand.licenseLabel}`;
+  const onFail = () => { if (cand) { markBad(cand.url); if (ci < pool.length - 1) { setCi(ci + 1); return; } } setFailed(true); };
   return (
     <figure className={`print${polaroid ? ' polaroid' : ''} ${className || ''}`} style={{ transform: `rotate(${rotate}deg)`, ...style }}>
       <div className="print-img" style={{ aspectRatio: aspect }}>
-        {src && !failed && <img src={src} srcSet={srcSet} sizes="(min-width: 900px) 40vw, 50vw" alt={alt} draggable={false} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />}
+        {src && !failed && <img src={src} srcSet={srcSet} sizes="(min-width: 900px) 40vw, 50vw" alt={alt} draggable={false} loading="lazy" referrerPolicy="no-referrer" onError={onFail} />}
         {!src && sat && <SatImage lat={sat.lat} lon={sat.lon} zoom={sat.zoom} alt={alt} />}
         {credit && (src || sat) && !failed && <span className="print-credit">{credit}</span>}
       </div>
@@ -239,15 +253,14 @@ const cap = (s?: string | null) => (s ? s[0].toUpperCase() + s.slice(1) : null);
 
 function LeftPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
   const dur = d ? durationMin(d) : null;
-  const photo1 = d?.photos[0]?.url ?? null;
-  const sat = !photo1 && d?.lat != null && d.lon != null ? { lat: d.lat, lon: d.lon, zoom: 13 } : null;
+  const { main, polaroid } = d ? photoPlan(d) : { main: null, polaroid: null };
+  const photo1 = main?.url ?? null;
+  // zoom 11 keeps the coastline in frame even when the entry point is out in deep (dark) water
+  const sat = !photo1 && d?.lat != null && d.lon != null ? { lat: d.lat, lon: d.lon, zoom: 11 } : null;
   const satellite = !!sat;
-  // Polaroid: second photo of yours, else the second-most-interesting species' verified photo.
-  const rare = d ? rarestSighting(d) : null;
-  const second = d?.sightings.filter((s) => s !== rare && s.species?.image).sort((a, b) => (a.species!.gbifCount ?? Infinity) - (b.species!.gbifCount ?? Infinity))[0];
-  const pol = d?.photos[1]?.url ?? second?.species?.image?.url ?? null;
-  const polSet = d?.photos[1] ? undefined : srcSetFor(second?.species?.image);
-  const seen = d?.sightings.filter((s) => s.species).map((s) => `${displayName(s.species, nameLang)}${s.count > 1 ? ` ×${s.count}` : ''}`) ?? [];
+  useSpeciesVersion();
+  useEffect(() => { d?.sightings.forEach((s) => { if (s.species && !s.species.enriched) requestCard(s.aphiaId, false); }); }, [d?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const seen = d?.sightings.filter((s) => s.species).map((s) => `${displayName(mergeSpecies(s.species!), nameLang)}${s.count > 1 ? ` ×${s.count}` : ''}`) ?? [];
   return (
     <div className="page-inner">
       <span className="j-tape-label"><Ink name="diver" style={{ width: '1.5em', height: '1.5em' }} /> Dive Log</span>
@@ -261,7 +274,7 @@ function LeftPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
       <Print src={photo1} sat={sat} alt={satellite ? 'Satellite view of the dive site' : 'Dive photo'} aspect={2.25} rotate={-0.6} className="j-main"
         credit={satellite ? 'Satellite © Esri, Maxar' : undefined} />
 
-      <div className="j-fields-left">
+      <div className="j-fields-left" style={d && !polaroid ? { width: '78%' } : undefined}>
         <Field icon="calendar" label="Date" value={d ? fmtDate(d.date) : null} />
         <Field icon="clock" label="Start Time" value={fmtTime(d?.startTime)} />
         <Field icon="clock" label="End Time" value={fmtTime(d?.endTime)} />
@@ -273,8 +286,7 @@ function LeftPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
         <Field icon="waves" label="Current" value={cap(d?.current)} />
       </div>
 
-      <Print src={pol} srcSet={polSet} alt={d?.photos[1] ? 'Dive photo' : second?.species ? displayName(second.species, nameLang) : 'Empty photo'} aspect={1} rotate={3.5}
-        corners={false} polaroid className="j-polaroid" />
+      {(polaroid || !d) && <Print src={polaroid?.url ?? null} alt={polaroid ? 'Dive photo' : 'Empty photo'} aspect={1} rotate={3.5} corners={false} polaroid className="j-polaroid" />}
 
       <div className="j-notes-block">
         <div className="jf jf-head"><Ink name="doc" /><span className="jf-label">Notes</span></div>
@@ -282,17 +294,25 @@ function LeftPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
       </div>
 
       <Seaweed style={{ right: '3%', bottom: '4%', width: '20%' }} />
-      {d && <span className="j-num">#{d.number}{d.pending && <span className="j-pending"> · not synced yet</span>}</span>}
+      {d && <span className="j-num">#{d.number}</span>}
     </div>
   );
 }
 
 function RightPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
-  const rare = d ? rarestSighting(d) : null;
-  const sp = rare?.species ?? null;
-  const ownShot = rare && d?.photos.find((p) => p.aphiaId === rare.aphiaId);
-  const img = ownShot ? ownShot.url : sp?.image?.url ?? null;
+  // "Dive Highlight": the species the diver chose (never inferred). Without one: a dive photo, else a clean page.
+  useSpeciesVersion();
+  const hl = d ? highlightSighting(d) : null;
+  const sp = hl?.species ? mergeSpecies(hl.species) : null;
+  useEffect(() => { if (hl?.species && !hl.species.enriched) requestCard(hl.aphiaId, true); }, [hl?.aphiaId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const plan = d ? photoPlan(d) : null;
+  const ownShot = plan?.highlightOwn ?? null;
+  const spare = !sp ? plan?.spare ?? null : null;
+  const showPrint = !d || !!sp || !!spare;
   const weight = d?.weights != null ? d.weights : null;
+  const noteChars = (d?.notes || '').length;
+  const noteCap = showPrint ? 150 : 520; // roughly what fits on the ruled lines
+  const continued = !!d && d.id > 0 && noteChars > noteCap;
   return (
     <div className="page-inner">
       <Field icon="people" label="Buddy / Partner" value={d?.buddy} />
@@ -305,24 +325,80 @@ function RightPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
       <Bubbles style={{ right: '5%', top: '3%', width: '6%' }} />
       <Seaweed style={{ right: '2%', top: '10%', width: '13%' }} />
 
-      <div className="jf jf-head j-sighting-head">
-        <Ink name="star" />
-        <span className="jf-label">Most interesting sighting</span>
-      </div>
-      <Print src={img} srcSet={ownShot ? undefined : srcSetFor(sp?.image)} alt={sp ? displayName(sp, nameLang) : 'Empty photo'} aspect={1.75} rotate={-1.2} className="j-sighting"
-        credit={!ownShot && sp?.image ? `${sp.image.author ? `${sp.image.author.slice(0, 40)} · ` : ''}${sp.image.licenseLabel}` : undefined} />
-      <div className="j-caption" dir="auto">
-        {sp ? <>{displayName(sp, nameLang)}{sp.rarity && <small> — {RARITY_META[sp.rarity].label.toLowerCase()}</small>}</> : ' '}
-      </div>
+      {showPrint && (
+        <>
+          <div className="jf jf-head j-sighting-head">
+            <Ink name="star" />
+            <span className="jf-label">Dive Highlight</span>
+          </div>
+          {sp && !ownShot
+            ? <Print candidates={sp.images?.length ? sp.images : sp.image ? [sp.image] : []} alt={displayName(sp, nameLang)} aspect={1.75} rotate={-1.2} className="j-sighting" />
+            : <Print src={ownShot?.url ?? spare?.url ?? null} alt={sp ? displayName(sp, nameLang) : spare ? 'Dive photo' : 'Empty photo'} aspect={1.75} rotate={-1.2} className="j-sighting" />}
+          <div className="j-caption" dir="auto">
+            {sp ? <>{displayName(sp, nameLang)}{hl?.special && <small> — special encounter</small>}</> : spare?.caption || ' '}
+          </div>
+        </>
+      )}
 
-      <div className="j-notes-block grow">
+      <div className={`j-notes-block grow${showPrint ? '' : ' tall'}`}>
         <div className="jf jf-head"><Ink name="doc" /><span className="jf-label">Dive Notes</span></div>
-        <div className="j-ruled big" dir="auto"><span>{d?.notes || ' '}</span></div>
+        <div className={`j-ruled ${showPrint ? 'big' : 'huge'}`} dir="auto"><span>{d?.notes || ' '}</span></div>
+        {continued && <Link to={`/log/${d!.id}`} className="j-more">continued in entry ›</Link>}
       </div>
 
       <Seaweed style={{ right: '3%', bottom: '3%', width: '18%' }} flip />
       {d && <span className="j-num">{fmtDate(d.date, { day: 'numeric', month: 'short' })}</span>}
       {!d && <Link to="/log/new" className="btn btn-primary j-cta"><Icon name="plus" size={16} />Log your first dive</Link>}
     </div>
+  );
+}
+
+/**
+ * Which of the diver's own photos goes where on a spread:
+ *   left print = 1st photo (else satellite view of the site);
+ *   right "Dive Highlight" = the highlighted species' own tagged photo, else (no highlight) the next photo;
+ *   polaroid = the next unused photo, if any.
+ */
+function photoPlan(d: Dive) {
+  const own = [...d.photos];
+  const highlightOwn = d.highlight != null ? own.find((p) => p.aphiaId === d.highlight) ?? null : null;
+  const used = new Set<number>();
+  const take = (p: (typeof own)[number] | null | undefined) => { if (p) used.add(p.id); return p ?? null; };
+  const main = take(own.find((p) => p !== highlightOwn));
+  if (highlightOwn) used.add(highlightOwn.id);
+  const spare = d.highlight == null ? take(own.find((p) => !used.has(p.id))) : null;
+  const polaroid = take(own.find((p) => !used.has(p.id)));
+  return { main, highlightOwn, spare, polaroid };
+}
+
+/** Compact, searchable list of every journal page — jump straight to an old dive without flipping. */
+function DiveFinder({ open, dives, current, onClose, onPick }: { open: boolean; dives: Dive[]; current: number; onClose: () => void; onPick: (i: number) => void }) {
+  const [q, setQ] = useState('');
+  useEffect(() => { if (open) setQ(''); }, [open]);
+  const n = q.trim().toLowerCase();
+  const rows = dives.map((d, i) => ({ d, i }))
+    .filter(({ d }) => !n || [d.siteName, d.area, d.buddy, d.date, String(d.number)].some((x) => x?.toLowerCase().includes(n)))
+    .reverse();
+  return (
+    <Sheet open={open} onClose={onClose} title="Find a dive">
+      <div className="search-box" style={{ marginBottom: 10 }}>
+        <Icon name="search" className="lead" size={20} />
+        <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Site, place, buddy, date or #" aria-label="Search dives" autoFocus />
+      </div>
+      {rows.length === 0 && <p className="muted" style={{ textAlign: 'center' }}>No dives match “{q}”.</p>}
+      <div className="finder-list">
+        {rows.slice(0, 300).map(({ d, i }) => (
+          <button key={d.id} className={`finder-row${i === current ? ' on' : ''}`} onClick={() => onPick(i)}>
+            <span className="dive-num small">{d.number}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span className="finder-site" dir="auto">{d.siteName}</span>
+              <span className="muted" style={{ fontSize: 13 }}>{fmtDate(d.date)}{d.area ? ` · ${d.area}` : ''}</span>
+            </span>
+            {i === current && <span className="caps" style={{ fontSize: 10 }}>Open</span>}
+          </button>
+        ))}
+      </div>
+      {rows.length > 300 && <p className="credits" style={{ textAlign: 'center' }}>Showing the 300 most recent matches — refine the search to narrow it down.</p>}
+    </Sheet>
   );
 }

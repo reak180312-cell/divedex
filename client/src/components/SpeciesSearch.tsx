@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { Icon } from './Icon';
-import { Img, RarityBadge } from './ui';
-import { srcSetFor } from '../img';
+import { SpeciesPhoto } from './ui';
 import { primeCard, useDebounced, useEnrichedCards } from '../hooks';
 import { useStore } from '../store';
 import type { SpeciesCard } from '../types';
@@ -19,6 +18,10 @@ interface Props {
 }
 
 const EXAMPLES = ['Nemo', 'lionfish', 'turtle', 'דג ליצן', 'Chaetodon', 'manta', 'octopus'];
+
+// Completed searches are reused for 10 minutes: retyping or reopening the picker costs no requests.
+const resultCache = new Map<string, { at: number; results: SpeciesCard[]; errors: string[] }>();
+const CACHE_MS = 10 * 60e3;
 
 export default function SpeciesSearch({ selected, onToggle, autoFocus, showFilters, initialQuery = '' }: Props) {
   const { nameLang, online } = useStore();
@@ -42,6 +45,12 @@ export default function SpeciesSearch({ selected, onToggle, autoFocus, showFilte
     if (group) params.set('group', group);
     if (size) params.set('size', size);
     if (dRegion) params.set('region', dRegion);
+    const cached = resultCache.get(params.toString());
+    if (cached && Date.now() - cached.at < CACHE_MS) {
+      cached.results.forEach(primeCard);
+      setResults(cached.results); setErrors(cached.errors); setPhase('done');
+      return;
+    }
     setPhase('local');
     // 1) instant: aliases + already-known species
     api.get<{ results: SpeciesCard[] }>(`/api/species/search?${params}&mode=local`, ctrl.signal)
@@ -51,7 +60,11 @@ export default function SpeciesSearch({ selected, onToggle, autoFocus, showFilte
     const t = setTimeout(() => {
       setPhase('remote');
       api.get<{ results: SpeciesCard[]; errors: string[] }>(`/api/species/search?${params}`, ctrl.signal)
-        .then((r) => { if (id !== reqId.current) return; r.results.forEach(primeCard); setResults(r.results); setErrors(r.errors); setPhase('done'); })
+        .then((r) => {
+          if (!r.errors.length) resultCache.set(params.toString(), { at: Date.now(), results: r.results, errors: [] });
+          if (id !== reqId.current) return;
+          r.results.forEach(primeCard); setResults(r.results); setErrors(r.errors); setPhase('done');
+        })
         .catch((e) => { if (id !== reqId.current || e.name === 'AbortError') return; setErrors([e.message]); setPhase('done'); });
     }, 250);
     return () => { clearTimeout(t); ctrl.abort(); };
@@ -122,14 +135,13 @@ function Result({ c, lang, picked, onToggle, kb, q }: { c: SpeciesCard; lang: Na
   const matchedOther = c.matched && ![name, c.scientificName, c.nameEn, c.nameHe].some((n) => n && n.toLowerCase() === c.matched!.toLowerCase());
   const body = (
     <>
-      <div className="thumb"><Img src={c.image?.url} srcSet={srcSetFor(c.image)} sizes="56px" alt={name} fallback={c.enriched ? undefined : <span className="skeleton" style={{ position: 'absolute', inset: 0 }} />} /></div>
+      <SpeciesPhoto className="thumb" species={c} sizes="56px" maxWidth={250} alt={name} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600 }} dir="auto">{name}</div>
         <div className="muted" style={{ fontSize: 13.5, fontStyle: 'italic' }}>{c.scientificName}{c.rank && c.rank !== 'Species' ? <span style={{ fontStyle: 'normal' }}> · {c.rank}</span> : null}</div>
         <div className="row" style={{ gap: 8, marginTop: 2 }}>
           {matchedOther && <span className="match-note" dir="auto">matches “{c.matched}”</span>}
           {!matchedOther && c.groupLabel && <span className="dim" style={{ fontSize: 12 }}>{c.groupLabel}</span>}
-          <RarityBadge rarity={c.rarity} className="pill-dot" />
         </div>
       </div>
     </>
