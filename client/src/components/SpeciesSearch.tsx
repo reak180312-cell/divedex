@@ -140,7 +140,11 @@ export default function SpeciesSearch({ selected, onToggle, autoFocus, showFilte
       <div style={{ marginTop: 10 }} role="listbox" aria-label="Species results">
         {shown.map((c, i) => <Result key={c.aphiaId} c={c} lang={nameLang} picked={selected?.has(c.aphiaId)} onToggle={onToggle} kb={i === kb} q={dq} />)}
         {phase === 'done' && shown.length === 0 && dq.length >= 2 && (
-          <p className="muted" style={{ textAlign: 'center', padding: 18 }}>No marine species found for “{dq}”. Try the scientific name or a genus.</p>
+          <p className="muted" style={{ textAlign: 'center', padding: 18 }}>
+            {errors.length
+              ? <>Couldn’t reach the species databases right now, so “{dq}” couldn’t be searched online. Check your connection and try again{online ? ' in a moment' : ''}.</>
+              : <>No marine species found for “{dq}”. Try the scientific name or a genus.</>}
+          </p>
         )}
       </div>
       {shown.length > 0 && <p className="credits" style={{ textAlign: 'center' }}>Names & taxonomy from WoRMS · Hebrew names via Wikidata/Wikipedia</p>}

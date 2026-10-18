@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import '@fontsource/rubik/latin-400.css';
 import '@fontsource/rubik/hebrew-400.css';
@@ -49,6 +50,19 @@ function App() {
     </Routes>
   );
 }
+
+// Keep installed copies (home-screen app) up to date: check for a new version on open, whenever the app
+// comes back to the foreground, and every 30 minutes. With autoUpdate the new version activates and the page
+// reloads by itself; the dive form autosaves, so nothing being typed is lost.
+registerSW({
+  immediate: true,
+  onRegisteredSW(_url, reg) {
+    if (!reg) return;
+    const check = () => { if (navigator.onLine) reg.update().catch(() => {}); };
+    setInterval(check, 30 * 60e3);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  },
+});
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
