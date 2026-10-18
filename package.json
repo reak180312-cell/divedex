@@ -10,7 +10,8 @@
     "preview": "vite preview --open",
     "sites": "node scripts/build-sites.mjs",
     "typecheck": "tsc -b",
-    "deploy": "npm run build && node scripts/deploy.mjs"
+    "deploy": "npm run build && node scripts/deploy.mjs",
+    "aliases": "node scripts/build-aliases.mjs"
   },
   "engines": {
     "node": ">=22.13"

@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { Icon } from './Icon';
 import { SpeciesPhoto } from './ui';
-import { primeCard, useDebounced, useEnrichedCards } from '../hooks';
+import { primeCard, requestPhotos, useDebounced, useEnrichedCards } from '../hooks';
+import { searchStream } from '../core/search.js';
 import { useStore } from '../store';
 import type { SpeciesCard } from '../types';
 import { displayName, GROUP_LABELS, isHebrew, SIZE_META, type NameLang } from '../util';
@@ -52,11 +53,28 @@ export default function SpeciesSearch({ selected, onToggle, autoFocus, showFilte
       return;
     }
     setPhase('local');
-    // 1) instant: aliases + already-known species
+    if (!size && !dRegion) {
+      // Streaming: local hits at once, then each remote source as it answers (no waiting for the slowest).
+      const t = setTimeout(() => {
+        setPhase('remote');
+        searchStream(dq, { group: group || undefined }, (rs: SpeciesCard[], st: { done: boolean; errors: string[] }) => {
+          if (id !== reqId.current) return;
+          rs.forEach(primeCard);
+          // start photo lookups for the first results right away (high priority)
+          rs.slice(0, 8).forEach((c) => { if (!c.photosFresh) requestPhotos(c.aphiaId, true); });
+          setResults(rs);
+          if (st.done) {
+            setErrors(st.errors); setPhase('done');
+            if (!st.errors.length) resultCache.set(params.toString(), { at: Date.now(), results: rs, errors: [] });
+          }
+        }).catch((e: Error) => { if (id === reqId.current) { setErrors([e.message]); setPhase('done'); } });
+      }, 120);
+      return () => { clearTimeout(t); ctrl.abort(); reqId.current++; };
+    }
+    // Size / region filters need extra verified data per result: use the one-shot search.
     api.get<{ results: SpeciesCard[] }>(`/api/species/search?${params}&mode=local`, ctrl.signal)
       .then((r) => { if (id === reqId.current && !size && !dRegion) setResults(r.results); })
       .catch(() => {});
-    // 2) full: WoRMS / Wikidata / Hebrew Wikipedia
     const t = setTimeout(() => {
       setPhase('remote');
       api.get<{ results: SpeciesCard[]; errors: string[] }>(`/api/species/search?${params}`, ctrl.signal)

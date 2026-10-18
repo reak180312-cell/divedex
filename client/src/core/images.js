@@ -96,13 +96,24 @@ const IINFO = 'prop=imageinfo&iiprop=url|extmetadata|mime|size&iiurlwidth=330&ii
  * Fast path for collection/search thumbnails: one Commons request (category members + per-file license
  * metadata in a single generator query), plus a search fallback only when the category is thin.
  */
-export async function commonsPhotoSet(scientificName, limit = 6) {
+export async function commonsPhotoSet(scientificName, limit = 6, { fallback = true } = {}) {
   const cat = await getJSON(`${COMMONS}?action=query&format=json&origin=*&generator=categorymembers&gcmtitle=${enc(`Category:${scientificName}`)}&gcmtype=file&gcmlimit=30&${IINFO}`, { ttl: 14 * DAY, timeout: 10000 });
   let pages = Object.values(cat?.query?.pages || {});
-  if (pages.filter((p) => commonsToImage(p)).length < 2) {
-    const s = await getJSON(`${COMMONS}?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=15&gsrsearch=${enc(`"${scientificName}" filetype:bitmap`)}&${IINFO}`, { ttl: 14 * DAY, timeout: 10000 });
-    pages = [...pages, ...Object.values(s?.query?.pages || {})];
-  }
+  if (fallback && pages.filter((p) => commonsToImage(p)).length < 2) pages = [...pages, ...(await commonsSearchPages(scientificName))];
+  return toPhotoSet(pages, limit);
+}
+
+async function commonsSearchPages(scientificName) {
+  const s = await getJSON(`${COMMONS}?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=15&gsrsearch=${enc(`"${scientificName}" filetype:bitmap`)}&${IINFO}`, { ttl: 14 * DAY, timeout: 10000 });
+  return Object.values(s?.query?.pages || {});
+}
+
+/** Commons keyword search (used when a species' category has too few usable photos). */
+export async function commonsSearchSet(scientificName, limit = 6) {
+  return toPhotoSet(await commonsSearchPages(scientificName), limit);
+}
+
+function toPhotoSet(pages, limit) {
   const seen = new Set();
   const out = pages.map(commonsToImage).filter((i) => i && !seen.has(i.id) && seen.add(i.id));
   return [...out.filter((i) => !i.illustration), ...out.filter((i) => i.illustration)].slice(0, limit);

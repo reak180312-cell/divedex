@@ -6,6 +6,15 @@
     <meta name="theme-color" content="#06202a" />
     <meta name="description" content="DiveDex — your scuba dive logbook and marine-life collection." />
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <!-- open connections to the photo & data hosts early (saves a TLS handshake per host on mobile) -->
+    <link rel="preconnect" href="https://commons.wikimedia.org" crossorigin />
+    <link rel="preconnect" href="https://upload.wikimedia.org" />
+    <link rel="preconnect" href="https://thumb.wikimedia.org" />
+    <link rel="preconnect" href="https://inaturalist-open-data.s3.amazonaws.com" />
+    <link rel="preconnect" href="https://www.marinespecies.org" crossorigin />
+    <link rel="dns-prefetch" href="https://api.gbif.org" />
+    <link rel="dns-prefetch" href="https://www.wikidata.org" />
+    <link rel="dns-prefetch" href="https://server.arcgisonline.com" />
     <title>DiveDex</title>
   </head>
   <body>

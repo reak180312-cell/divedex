@@ -3,6 +3,7 @@ import { settle, pool } from './http.js';
 import { worms, sizeClass } from './worms.js';
 import { searchHebrew, searchEnglishEntities } from './wiki.js';
 import { ALIASES } from './aliases.js';
+import RESOLVED from './aliases-resolved.json';
 import { norm, fuzzyScore, hasHebrew } from './text.js';
 import { upsertRecord, rowToCard, speciesRow, getCard, getDistributions, ensureRecord, allNames, addNames } from './species.js';
 
@@ -12,6 +13,13 @@ const aliasResolved = new Map(); // scientific name -> accepted AphiaID
 
 async function resolveName(name) {
   if (aliasResolved.has(name)) return aliasResolved.get(name);
+  // Pre-resolved at build time (scripts/build-aliases.mjs): no network round-trip for nickname hits.
+  const pre = RESOLVED[name];
+  if (pre?.AphiaID) {
+    if (!(await speciesRow(pre.AphiaID))) await upsertRecord(pre);
+    aliasResolved.set(name, pre.AphiaID);
+    return pre.AphiaID;
+  }
   // Already known locally? (works offline)
   const local = (await allNames()).find((r) => r.lang === 'sci' && r.norm === norm(name));
   if (local) { aliasResolved.set(name, local.aphia_id); return local.aphia_id; }
@@ -101,6 +109,69 @@ async function hydrate(ids) {
   const still = [];
   for (const id of missing) if (!(await speciesRow(id))) still.push(id);
   await pool(still, 3, (id) => ensureRecord(id));
+}
+
+async function toResults(map, { group, limit }) {
+  const hits = [...map.values()].sort((a, b) => b.score - a.score).slice(0, 60);
+  const results = [];
+  const seen = new Set();
+  for (const h of hits) {
+    const row = await speciesRow(h.id);
+    if (!row || seen.has(row.aphia_id)) continue;
+    seen.add(row.aphia_id);
+    const rec = row.record || {};
+    if (!(rec.isMarine === 1 || rec.isBrackish === 1 || (rec.isMarine == null && rec.isBrackish == null))) continue;
+    if (group && row.group_key !== group) continue;
+    results.push({ ...rowToCard(row), score: h.score, matched: h.matched, matchedLang: h.lang });
+  }
+  return results.slice(0, limit);
+}
+
+/**
+ * Streaming search: calls `onUpdate(results, { done, errors })` after the local tier and again as each remote
+ * source answers, so the list (and its photos) appear without waiting for the slowest source.
+ * Measured: WoRMS' common-name search alone can take 5 s; the other sources usually answer in < 1 s.
+ * @param {string} qRaw
+ * @param {{ group?: string, limit?: number }} opts
+ * @param {(results: any[], state: { done: boolean, errors: string[] }) => void} onUpdate
+ */
+export async function searchStream(qRaw, { group, limit = 24 } = {}, onUpdate) {
+  const map = await searchLocal(qRaw);
+  const errors = [];
+  let last = '';
+  const emit = async (done = false) => {
+    const results = await toResults(map, { group, limit });
+    const sig = results.map((r) => `${r.aphiaId}:${r.score.toFixed(3)}`).join(',');
+    if (sig !== last || done) { last = sig; onUpdate(results, { done, errors }); }
+  };
+  await emit();
+  const q = norm(qRaw);
+  const term = qRaw.trim();
+  const guard = (p, label) => p.catch((e) => { errors.push(`${label}: ${e.message}`); return []; });
+  const step = (p) => p.then(() => emit());
+  if (hasHebrew(qRaw)) {
+    await step(guard(searchHebrew(term), 'Hebrew Wikipedia').then(async (hits) => {
+      await hydrate(hits.map((h) => h.aphiaId));
+      for (const h of hits) add(map, h.aphiaId, 0.86 - h.rank * 0.03, h.title, 'he');
+    }));
+  } else {
+    await Promise.all([
+      step(guard(worms.byName(term), 'WoRMS').then(async (byName) => {
+        await takeRecords(map, byName, q, null, 'sci');
+        // typo-tolerant scientific match (TAXAMATCH) only when nothing obvious came back
+        if (byName.length === 0 && /^[a-z]+ ?[a-z]*$/i.test(term) && term.length >= 5) {
+          const [mm] = await guard(worms.matchNames([term]), 'WoRMS TAXAMATCH');
+          await takeRecords(map, mm || [], q, 0.72, 'sci');
+        }
+      })),
+      term.length >= 3 ? step(guard(worms.byVernacular(term), 'WoRMS vernacular').then((byVern) => takeRecords(map, byVern, q, 0.8, 'en'))) : null,
+      term.length >= 3 ? step(guard(searchEnglishEntities(term), 'Wikidata').then(async (wd) => {
+        await hydrate(wd.map((h) => h.aphiaId));
+        for (const h of wd) add(map, h.aphiaId, 0.74 - h.rank * 0.02, null, 'en');
+      })) : null,
+    ]);
+  }
+  await emit(true);
 }
 
 export async function search(qRaw, { remote = true, group, size, region, limit = 24 } = {}) {

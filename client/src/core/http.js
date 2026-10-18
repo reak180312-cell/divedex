@@ -8,7 +8,7 @@ export class UpstreamError extends Error {
 // Max concurrent requests per host (Wikimedia & Nominatim are strict).
 // Measured: GBIF's edge cache answers 429 (Retry-After: 3) to bursts from one address, so GBIF gets
 // 2 parallel requests spaced ≥400 ms apart; Nominatim's policy is 1 request per second.
-const LIMITS = { 'www.wikidata.org': 2, 'commons.wikimedia.org': 3, 'he.wikipedia.org': 2, 'en.wikipedia.org': 2, 'nominatim.openstreetmap.org': 1, 'api.gbif.org': 2, 'www.marinespecies.org': 4 };
+const LIMITS = { 'www.wikidata.org': 2, 'commons.wikimedia.org': 6, 'he.wikipedia.org': 2, 'en.wikipedia.org': 2, 'nominatim.openstreetmap.org': 1, 'api.gbif.org': 2, 'www.marinespecies.org': 4 };
 const MIN_INTERVAL = { 'api.gbif.org': 400, 'nominatim.openstreetmap.org': 1100 };
 const hosts = new Map();
 const slot = (host) => hosts.get(host) || hosts.set(host, { active: 0, queue: [], pauseUntil: 0, nextStart: 0 }).get(host);

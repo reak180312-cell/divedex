@@ -36,7 +36,7 @@ class Queue {
   }
 }
 const cardQ = new Queue(2);
-const photoQ = new Queue(4);
+const photoQ = new Queue(8); // photo lookups mostly hit Commons, which answers fast and is not throttled
 
 interface Entry { card?: SpeciesCard; photos?: SpeciesImage[]; cardTried?: boolean; photosTried?: boolean; photoRetries?: number }
 const cache = new Map<number, Entry>();
@@ -150,7 +150,7 @@ export function useLocalFrequency(aphiaId: number, lat: number | null | undefine
 }
 
 // ---------- image download slots ----------
-// At most 6 photo downloads in flight; the rest wait (visible cards ask first because they mount first).
+// At most 8 photo downloads in flight; the rest wait (visible cards ask first because they mount first).
 let imgActive = 0;
 const imgWaiting: (() => void)[] = [];
 export function acquireImageSlot(): Promise<() => void> {
@@ -160,7 +160,7 @@ export function acquireImageSlot(): Promise<() => void> {
       let done = false;
       resolve(() => { if (done) return; done = true; imgActive--; imgWaiting.shift()?.(); });
     };
-    if (imgActive < 6) grant(); else imgWaiting.push(grant);
+    if (imgActive < 8) grant(); else imgWaiting.push(grant);
   });
 }
 

@@ -5,7 +5,7 @@ import { dbp } from './db.js';
 import { settle } from './http.js';
 import { worms, parseTraits, sizeClass, groupOf, GROUPS } from './worms.js';
 import { entityForAphia, namesFromEntity, summary } from './wiki.js';
-import { commonsImages, commonsPhotoSet, gbifImages } from './images.js';
+import { commonsImages, commonsPhotoSet, commonsSearchSet, gbifImages } from './images.js';
 import { norm } from './text.js';
 import { isHighlightTaxon } from './highlights.js';
 
@@ -164,10 +164,17 @@ export async function getPhotos(aphiaId, { force = false } = {}) {
   const p = (async () => {
     const failed = [];
     const sci = row.scientific_name;
-    // Commons first (one request, fast, not throttled in our measurements); GBIF only when Commons has
-    // fewer than two real photographs — that keeps GBIF traffic low enough to avoid its burst limit.
-    const commons = await settle(commonsPhotoSet(sci, 4), [], failed);
-    const gbif = commons.filter((i) => !i.illustration).length < 2 ? await settle(gbifImages(sci, 4), [], failed) : [];
+    // Commons category first (one request, fast, not throttled in our measurements). Only when it has fewer
+    // than two real photographs: Commons keyword search and GBIF, in parallel. Keeps GBIF traffic low.
+    let commons = await settle(commonsPhotoSet(sci, 4, { fallback: false }), [], failed);
+    let gbif = [];
+    if (commons.filter((i) => !i.illustration).length < 2) {
+      const [more, g] = await Promise.all([settle(commonsSearchSet(sci, 4), [], failed), settle(gbifImages(sci, 4), [], failed)]);
+      const ids = new Set(commons.map((i) => i.id));
+      commons = [...commons, ...more.filter((i) => !ids.has(i.id))];
+      commons = [...commons.filter((i) => !i.illustration), ...commons.filter((i) => i.illustration)];
+      gbif = g;
+    }
     const photos = [...commons.filter((i) => !i.illustration), ...gbif, ...commons.filter((i) => i.illustration)].slice(0, 6);
     const fresh = await speciesRow(id);
     const keepOld = !photos.length && failed.length; // offline / rate-limited: don't wipe what we had
