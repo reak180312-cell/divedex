@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
-import { LocalBadge, Sheet, SpecialMark, SpeciesPhoto } from '../components/ui';
+import { ScoreBadge, Sheet, SpecialMark, SpeciesPhoto } from '../components/ui';
 import { useStore } from '../store';
-import { peekLocal, requestLocal, useBackgroundCards, useClickOutside, useLocalFrequency, useNearViewport, useSpeciesVersion } from '../hooks';
+import { peekLocal, requestLocal, useBackgroundCards, useClickOutside, useNearViewport, useSpeciesVersion } from '../hooks';
 import type { CollectionEntry, LocalBand, SizeClass } from '../types';
 import { displayName, fmtDate, fmtSize, GROUP_LABELS, LOCAL_META, SIZE_META } from '../util';
 
 type TimeKey = 'any' | '30d' | '365d' | `y${number}`;
-type SortKey = 'recent' | 'special' | 'sightings' | 'name';
+type SortKey = 'recent' | 'score' | 'special' | 'sightings' | 'name';
+type ScoreBand = '9-10' | '7-8' | '4-6' | '1-3';
+const SCORE_BANDS: Record<ScoreBand, [number, number, string]> = { '9-10': [9, 10, 'Legendary · 9–10'], '7-8': [7, 8, 'Highlight · 7–8'], '4-6': [4, 6, 'Notable · 4–6'], '1-3': [1, 3, 'Everyday · 1–3'] };
 
-const SORTS: Record<SortKey, string> = { recent: 'Recently discovered', special: 'Special encounters first', sightings: 'Most sighted', name: 'Name' };
+const SORTS: Record<SortKey, string> = { recent: 'Recently discovered', score: 'Highest score first', special: 'Special encounters first', sightings: 'Most sighted', name: 'Name' };
 const BAND_KEYS: LocalBand[] = ['frequent', 'occasional', 'rare', 'none'];
 
 export default function Collection() {
@@ -18,6 +20,7 @@ export default function Collection() {
   const items = useBackgroundCards(collection);
   const [band, setBand] = useState<LocalBand | null>(null);
   const [special, setSpecial] = useState(false);
+  const [scoreBand, setScoreBand] = useState<ScoreBand | null>(null);
   useSpeciesVersion();
   const [size, setSize] = useState<SizeClass | 'unknown' | null>(null);
   const [time, setTime] = useState<TimeKey>('any');
@@ -39,6 +42,7 @@ export default function Collection() {
     const now = Date.now();
     const out = items.filter((s) => {
       if (special && !s.special) return false;
+      if (scoreBand) { const n = s.score?.score ?? 0; const [lo, hi] = SCORE_BANDS[scoreBand]; if (n < lo || n > hi) return false; }
       if (band) {
         const l = peekLocal(s.aphiaId, s.lastLat, s.lastLon);
         if (l === undefined) { pendingLocal++; return false; }
@@ -57,15 +61,16 @@ export default function Collection() {
       return true;
     });
     out.sort((a, b) =>
-      sort === 'special' ? Number(b.special) - Number(a.special) || b.lastSeen.localeCompare(a.lastSeen)
+      sort === 'score' ? (b.score?.score ?? 0) - (a.score?.score ?? 0) || b.lastSeen.localeCompare(a.lastSeen)
+      : sort === 'special' ? Number(b.special) - Number(a.special) || b.lastSeen.localeCompare(a.lastSeen)
       : sort === 'sightings' ? (b.dives + b.manual) - (a.dives + a.manual)
       : sort === 'name' ? displayName(a, nameLang).localeCompare(displayName(b, nameLang))
       : b.firstSeen.localeCompare(a.firstSeen));
     return out;
   })();
 
-  const anyFilter = band || special || size || time !== 'any' || area || group;
-  const reset = () => { setBand(null); setSpecial(false); setSize(null); setTime('any'); setArea(null); setGroup(null); };
+  const anyFilter = band || scoreBand || special || size || time !== 'any' || area || group;
+  const reset = () => { setBand(null); setScoreBand(null); setSpecial(false); setSize(null); setTime('any'); setArea(null); setGroup(null); };
   const setV = (v: 'grid' | 'list') => { setView(v); try { localStorage.setItem('dd:view', v); } catch { /* private mode */ } };
 
   const timeLabel = time === 'any' ? 'Time' : time === '30d' ? 'Last 30 days' : time === '365d' ? 'Last 12 months' : time.slice(1);
@@ -85,6 +90,14 @@ export default function Collection() {
       <div className="filters">
         <button className={`chip${!anyFilter ? ' active' : ''}`} onClick={reset}>All</button>
         <button className={`chip${special ? ' active' : ''}`} onClick={() => setSpecial((x) => !x)} aria-pressed={special}><Icon name="star" size={15} />Special</button>
+        <Dropdown label={scoreBand ? SCORE_BANDS[scoreBand][2].split(' ·')[0] : 'Score'} active={!!scoreBand}>
+          {(close) => (
+            <>
+              <MenuItem on={!scoreBand} onClick={() => { setScoreBand(null); close(); }}>Any score</MenuItem>
+              {(Object.keys(SCORE_BANDS) as ScoreBand[]).map((k) => <MenuItem key={k} on={scoreBand === k} onClick={() => { setScoreBand(k); close(); }}>{SCORE_BANDS[k][2]}</MenuItem>)}
+            </>
+          )}
+        </Dropdown>
         <Dropdown label={band ? LOCAL_META[band].short : 'Local'} active={!!band}>
           {(close) => (
             <>
@@ -167,6 +180,7 @@ export default function Collection() {
                     <div className="t3">{seenText(s)} · first {fmtDate(s.firstSeen)}</div>
                   </div>
                   {s.special && <SpecialMark className="special-mark small" label={false} />}
+                  <ScoreBadge score={s.score} className="pill-dot score-pill" />
                 </Link>
               ))}
             </div>
@@ -192,7 +206,8 @@ export default function Collection() {
           </>
         )}
         <p className="credits" style={{ marginTop: 20 }}>
-          <b>Local frequency</b> ranks a species among the species of its group with GBIF records within {100} km of where you last saw it:
+          <b>Score</b> (1–10) is DiveDex's rating of how special most divers find an animal — mantas and whale sharks are 10, damselfish 1. It's popular opinion, not biology.
+          <br /><b>Local frequency</b> ranks a species among the species of its group with GBIF records within {100} km of where you last saw it:
           frequent (top quarter), occasional (middle half), rarely recorded (bottom quarter), or no nearby records. It reflects where people
           record wildlife, not true abundance, and shows nothing when an area has too few records to judge.
           <br /><b>Special</b> marks the encounters you starred yourself. Size is the maximum body length in WoRMS; depth and day/night come from your dives.
@@ -211,13 +226,12 @@ const seenText = (s: CollectionEntry) => {
 function GridCard({ s, name }: { s: CollectionEntry; name: string }) {
   const depth = s.depthMin != null && s.depthMax != null ? (s.depthMin === s.depthMax ? `${s.depthMax} m` : `${s.depthMin}–${s.depthMax} m`) : null;
   const night = s.nightDives > s.dayDives;
-  const [ref, near] = useNearViewport<HTMLAnchorElement>(200);
-  const local = useLocalFrequency(s.aphiaId, s.lastLat, s.lastLon, near);
+  const [ref] = useNearViewport<HTMLAnchorElement>(200);
   return (
     <Link ref={ref} to={`/species/${s.aphiaId}`} className="sp-card">
       <SpeciesPhoto species={s} sizes="(max-width: 520px) 46vw, 240px" maxWidth={500} alt={name} />
       <span className="sp-count" title={seenText(s)}>{s.dives + s.manual}{s.special && <SpecialMark className="special-mark" label={false} />}</span>
-      <LocalBadge band={local?.band} />
+      <ScoreBadge score={s.score} />
       <div className="sp-foot">
         <div className="sp-name" dir="auto">{name}</div>
         <div className="sp-meta">

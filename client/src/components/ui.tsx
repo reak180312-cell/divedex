@@ -95,6 +95,16 @@ export function LocalBadge({ band, className = 'rarity-badge', long }: { band?: 
   return <span className={className} title={m.label}><i style={{ background: m.color ?? undefined }} />{long ? m.label : m.short}</span>;
 }
 
+/** Diver rarity score 1–10 (how special most divers find it). */
+export function ScoreBadge({ score, className = 'rarity-badge score' }: { score?: { score: number } | null; className?: string }) {
+  if (!score) return null;
+  const t = scoreTier(score.score);
+  return <span className={className} title={`Rarity score ${score.score}/10 — how special most divers find it`}><Icon name="star" size={12} strokeWidth={2.4} style={{ color: t.color, fill: t.color }} />{score.score}/10</span>;
+}
+export function scoreTier(n: number) {
+  return n >= 9 ? { label: 'Legendary', color: '#ffc94d' } : n >= 7 ? { label: 'Highlight', color: '#c18bff' } : n >= 4 ? { label: 'Notable', color: '#5cb8ff' } : { label: 'Everyday', color: '#5ed69a' };
+}
+
 /** The diver's own "special encounter" mark. */
 export function SpecialMark({ className = 'special-mark', label = true }: { className?: string; label?: boolean }) {
   return <span className={className} title="You marked this as a special encounter"><Icon name="star" size={13} strokeWidth={2.2} />{label && 'Special'}</span>;

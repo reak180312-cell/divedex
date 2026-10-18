@@ -8,6 +8,7 @@ import { entityForAphia, namesFromEntity, summary } from './wiki.js';
 import { commonsImages, commonsPhotoSet, commonsSearchSet, gbifImages } from './images.js';
 import { norm } from './text.js';
 import { isHighlightTaxon } from './highlights.js';
+import { rarityScoreFor } from './wow.js';
 
 const DAY_MS = 86400e3;
 const CARD_TTL = 30 * DAY_MS;
@@ -62,8 +63,10 @@ export function rowToCard(row) {
     authority: row.authority,
     rank: row.rank,
     family: rec.family ?? null,
-    // taxa many divers treat as a highlight: pre-star them when added to a dive (diver can unstar)
-    suggestSpecial: isHighlightTaxon(rec),
+    // how special most divers consider this animal (editorial 1–10 rating, see core/wow.js)
+    score: rarityScoreFor(rec, row.group_key),
+    // pre-star highly rated animals when added to a dive (diver can unstar)
+    suggestSpecial: isHighlightTaxon(rec) || (rarityScoreFor(rec, row.group_key)?.score ?? 0) >= 8,
     nameEn: row.name_en ?? null,
     nameHe: row.name_he ?? null,
     group: row.group_key,

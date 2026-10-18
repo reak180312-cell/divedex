@@ -335,7 +335,7 @@ function RightPage({ d, nameLang }: { d: Dive | null; nameLang: NameLang }) {
             ? <Print candidates={sp.images?.length ? sp.images : sp.image ? [sp.image] : []} alt={displayName(sp, nameLang)} aspect={1.75} rotate={-1.2} className="j-sighting" />
             : <Print src={ownShot?.url ?? spare?.url ?? null} alt={sp ? displayName(sp, nameLang) : spare ? 'Dive photo' : 'Empty photo'} aspect={1.75} rotate={-1.2} className="j-sighting" />}
           <div className="j-caption" dir="auto">
-            {sp ? <>{displayName(sp, nameLang)}{hl?.special && <small> — special encounter</small>}</> : spare?.caption || ' '}
+            {sp ? <>{displayName(sp, nameLang)}{sp.score && <small> — {sp.score.score}/10</small>}{hl?.special && <small> · special</small>}</> : spare?.caption || ' '}
           </div>
         </>
       )}

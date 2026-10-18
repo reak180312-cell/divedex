@@ -73,7 +73,7 @@ export function requestPhotos(id: number, high = true) {
 }
 export const primeCard = (c: SpeciesCard) => { const e = entry(c.aphiaId); if (c.enriched || !e.card) e.card = c; };
 
-const CARD_KEYS = ['nameEn', 'nameHe', 'sizeCm', 'sizeClass', 'gbifCount', 'rarity', 'groupLabel', 'family', 'enriched'] as const;
+const CARD_KEYS = ['nameEn', 'nameHe', 'sizeCm', 'sizeClass', 'gbifCount', 'rarity', 'groupLabel', 'family', 'score', 'enriched'] as const;
 /** Base item (e.g. a collection entry) + freshest cached species fields + verified photo candidates. */
 export function mergeSpecies<T extends SpeciesCard>(c: T): T {
   const e = cache.get(c.aphiaId);

@@ -25,6 +25,8 @@ export interface SpeciesCard {
   rank?: string | null;
   family?: string | null;
   suggestSpecial?: boolean;
+  /** editorial "how special do divers find it" rating, 1–10 (not biological rarity) */
+  score?: { score: number; basis: string } | null;
   nameEn?: string | null;
   nameHe?: string | null;
   group?: string | null;

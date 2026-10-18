@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { Icon } from './Icon';
-import { SpeciesPhoto } from './ui';
+import { ScoreBadge, SpeciesPhoto } from './ui';
 import { primeCard, requestPhotos, useDebounced, useEnrichedCards } from '../hooks';
 import { searchStream } from '../core/search.js';
 import { useStore } from '../store';
@@ -164,6 +164,7 @@ function Result({ c, lang, picked, onToggle, kb, q }: { c: SpeciesCard; lang: Na
         <div className="row" style={{ gap: 8, marginTop: 2 }}>
           {matchedOther && <span className="match-note" dir="auto">matches “{c.matched}”</span>}
           {!matchedOther && c.groupLabel && <span className="dim" style={{ fontSize: 12 }}>{c.groupLabel}</span>}
+          <ScoreBadge score={c.score} className="pill-dot score-pill" />
         </div>
       </div>
     </>

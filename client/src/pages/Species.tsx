@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { Icon } from '../components/Icon';
 import MapView, { type MapPoint } from '../components/MapView';
-import { Credit, Img, LocalBadge, Sheet, SpecialMark, useToast } from '../components/ui';
+import { Credit, Img, LocalBadge, scoreTier, Sheet, SpecialMark, useToast } from '../components/ui';
 import { isBad, markBad, sourcesFor } from '../img';
 import { mergeSpecies, primeCard, requestPhotos, useLocalFrequency, useSpeciesVersion } from '../hooks';
 import { useStore } from '../store';
@@ -33,6 +33,7 @@ export default function Species() {
   const [more, setMore] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [localInfo, setLocalInfo] = useState(false);
+  const [scoreInfo, setScoreInfo] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useToast();
@@ -150,11 +151,11 @@ export default function Species() {
           <div className="sci">{view.scientificName}{view.authority ? <span style={{ fontStyle: 'normal', fontSize: 13 }}> {view.authority}</span> : null}</div>
           {altName && altName !== name && <div className="muted" style={{ fontSize: 15, marginTop: 2 }}><span dir="auto">{altName}</span></div>}
         </div>
-        {seenCount > 0 && (
-          <div className="score-box" aria-label={`Seen ${seenCount} times`}>
-            <span><b>{seenCount}</b><span className="caps">{seenCount === 1 ? 'Sighting' : 'Sightings'}</span></span>
-            {mine?.special && <SpecialMark />}
-          </div>
+        {view.score && (
+          <button className="score-box" onClick={() => setScoreInfo(true)} aria-label={`Rarity score ${view.score.score} out of 10 — about this rating`}>
+            <Icon name="star" size={26} style={{ color: scoreTier(view.score.score).color, fill: scoreTier(view.score.score).color }} />
+            <span><b>{view.score.score}</b> <small>/ 10</small><span className="caps">Rarity score</span></span>
+          </button>
         )}
       </div>
 
@@ -174,7 +175,8 @@ export default function Species() {
       <section className="glass section">
         <div className="section-head">
           <Icon name="pin" size={22} style={{ color: 'var(--accent)' }} />
-          <span className="caps" style={{ flex: 1 }}>{areas.length ? `Seen in ${areas.slice(0, 2).join(' & ')}${areas.length > 2 ? ' +' : ''}` : 'Your sightings'}</span>
+          <span className="caps" style={{ flex: 1 }}>{areas.length ? `Seen in ${areas.slice(0, 2).join(' & ')}${areas.length > 2 ? ' +' : ''}` : 'Your sightings'}{seenCount > 0 ? ` · ${seenCount}×` : ''}</span>
+          {mine?.special && <SpecialMark />}
           {(mine?.sightings.length ?? 0) > 0 && <button className="link-caps" onClick={() => setShowAll((x) => !x)}>{showAll ? 'Hide' : 'View all sightings'} <Icon name="right" size={14} /></button>}
         </div>
         {mine == null ? <div className="skeleton" style={{ height: 120, borderRadius: 14 }} /> : seenCount === 0 ? (
@@ -262,6 +264,21 @@ export default function Species() {
           <button className="btn btn-primary btn-big" onClick={() => addToCollection(false)}><Icon name="plus" />Add to collection</button>
           <button className="btn btn-big" onClick={() => addToCollection(true)}><Icon name="star" />Add as a special encounter</button>
         </div>
+      </Sheet>
+
+      <Sheet open={scoreInfo} onClose={() => setScoreInfo(false)} title="Rarity score">
+        {view.score && (
+          <>
+            <p className="about-text" style={{ fontSize: 15 }}>
+              <b dir="auto">{name}</b> scores <b>{view.score.score}/10</b> ({scoreTier(view.score.score).label.toLowerCase()}), based on {view.score.basis}.
+            </p>
+            <p className="credits" style={{ marginTop: 10 }}>
+              The rarity score is DiveDex's rating of how special most divers find an encounter — the animals people travel for, like mantas
+              and whale sharks, are 10; everyday reef fish such as damselfish are 1. It reflects popular opinion, not how rare the animal
+              actually is: a 10 can be common in some places. For what's recorded near your dive site, see <b>local frequency</b> below.
+            </p>
+          </>
+        )}
       </Sheet>
 
       <Sheet open={localInfo} onClose={() => setLocalInfo(false)} title="Local frequency">

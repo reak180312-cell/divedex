@@ -586,3 +586,7 @@ a.btn, a.btn:hover { text-decoration: none; }
   .sp-meta { gap: 7px; font-size: 12px; }
   .sp-meta svg { width: 14px; height: 14px; }
 }
+
+/* rarity score badge */
+.rarity-badge.score { gap: 4px; letter-spacing: .02em; font-size: 12px; }
+.score-pill { font-size: 11.5px; color: var(--muted); }
